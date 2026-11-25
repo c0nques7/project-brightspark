@@ -1,5 +1,7 @@
 // Unified input for keyboard + mouse (pointer lock) and touch (twin virtual sticks).
 
+import { settings, type Action } from './settings';
+
 const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
 
 export class Input {
@@ -27,6 +29,8 @@ export class Input {
   private tMoveX = 0;
   private tMoveZ = 0;
   private tBoost = false;
+  private tTurnX = 0;
+  private tTurnY = 0;
   private cruiseToggle = false;
 
   constructor(private el: HTMLElement, touchRoot: HTMLElement) {
@@ -36,7 +40,7 @@ export class Input {
       this.keys.add(e.code);
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
       if (e.code === 'KeyP') this.onPause?.();
-      if (e.code === 'KeyX' && !e.repeat) this.cruiseToggle = true;
+      if (settings.bindings.cruise.includes(e.code) && !e.repeat) this.cruiseToggle = true;
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => {
@@ -75,7 +79,8 @@ export class Input {
 
   /** Mouse movement since last call, in pixels. */
   consumeLook(): [number, number] {
-    const r: [number, number] = [this.lookX, this.lookY];
+    const k = settings.mouseSens;
+    const r: [number, number] = [this.lookX * k, this.lookY * k * (settings.invertY ? -1 : 1)];
     this.lookX = this.lookY = 0;
     return r;
   }
@@ -88,12 +93,16 @@ export class Input {
   }
 
   poll() {
-    const k = (...codes: string[]) => (codes.some((c) => this.keys.has(c)) ? 1 : 0);
-    this.moveZ = clamp1(k('KeyW') - k('KeyS') + this.tMoveZ);
-    this.moveX = clamp1(k('KeyD') - k('KeyA') + this.tMoveX);
-    this.moveY = clamp1(k('Space', 'KeyR') - k('KeyC', 'KeyF'));
-    this.roll = k('KeyQ') - k('KeyE');
-    this.boost = k('ShiftLeft', 'ShiftRight') === 1 || this.tBoost;
+    const b = settings.bindings;
+    const k = (a: Action) => (b[a].some((c) => this.keys.has(c)) ? 1 : 0);
+    this.moveZ = clamp1(k('forward') - k('back') + this.tMoveZ);
+    this.moveX = clamp1(k('right') - k('left') + this.tMoveX);
+    this.moveY = clamp1(k('up') - k('down'));
+    this.roll = k('rollLeft') - k('rollRight');
+    this.boost = k('boost') === 1 || this.tBoost;
+    // Touch aim stick, scaled by sensitivity and optional invert.
+    this.turnX = this.tTurnX * settings.touchSens;
+    this.turnY = this.tTurnY * settings.touchSens * (settings.invertY ? -1 : 1);
     this.fire = this.mouseDown;
   }
 
@@ -175,8 +184,8 @@ export class Input {
     });
     // Quadratic response gives fine aim near the centre and fast turns at the edge.
     stick('right', 'AIM', (x, y) => {
-      this.turnX = Math.sign(x) * x * x;
-      this.turnY = Math.sign(y) * y * y;
+      this.tTurnX = Math.sign(x) * x * x;
+      this.tTurnY = Math.sign(y) * y * y;
     });
 
     const button = (cls: string, text: string, down: () => void, up?: () => void) => {

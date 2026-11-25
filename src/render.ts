@@ -23,6 +23,7 @@ const GradeShader = {
     uTime: { value: 0 },
     uHurt: { value: 0 },
     uBoost: { value: 0 },
+    uFx: { value: 1 },
     uAspect: { value: 1 },
   },
   vertexShader: /* glsl */ `
@@ -31,25 +32,25 @@ const GradeShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform float uTime, uHurt, uBoost, uAspect;
+    uniform float uTime, uHurt, uBoost, uAspect, uFx;
     varying vec2 vUv;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec2 c = vUv - 0.5;
       float r = length(c * vec2(uAspect, 1.0));
       // Chromatic fringe toward the edges, stronger when boosting or hit.
-      float ca = (0.0012 + uBoost * 0.003 + uHurt * 0.006) * r;
+      float ca = ((0.0012 + uBoost * 0.003) * uFx + uHurt * 0.006) * r;
       vec2 dir = normalize(c + 1e-5);
       vec3 col;
       col.r = texture2D(tDiffuse, vUv + dir * ca).r;
       col.g = texture2D(tDiffuse, vUv).g;
       col.b = texture2D(tDiffuse, vUv - dir * ca).b;
       // Vignette.
-      col *= mix(1.0, smoothstep(1.15, 0.35, r), 0.55);
+      col *= mix(1.0, smoothstep(1.15, 0.35, r), 0.55 * uFx);
       // Damage tint.
       col = mix(col, col * vec3(1.6, 0.45, 0.35), uHurt * 0.5 * smoothstep(0.2, 0.9, r));
       // Fine film grain (helps hide banding in the dark mine and nebula gradients).
-      col += (hash(vUv * 1000.0 + uTime) - 0.5) * 0.012;
+      col += (hash(vUv * 1000.0 + uTime) - 0.5) * 0.012 * uFx;
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -84,6 +85,9 @@ export class Renderer {
   private sampleTimer = 0;
   private goodStreak = 0;
   private locked = false;
+  private urlLocked = false;
+  private userBloom = 1;
+  private effectsOn = true;
   private w = 1;
   private h = 1;
   onTierChange?: (t: Tier) => void;
@@ -108,7 +112,7 @@ export class Renderer {
     const saved = forced ?? safeGet('bs-quality');
     const n = saved === null ? NaN : Number(saved);
     this.tierIndex = Number.isInteger(n) && n >= 0 && n < this.tiers.length ? n : isTouch ? 1 : 2;
-    if (forced !== null) this.locked = true;
+    if (forced !== null) this.locked = this.urlLocked = true;
 
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
@@ -131,6 +135,29 @@ export class Renderer {
 
   get tier() {
     return this.tiers[this.tierIndex];
+  }
+
+  /** -1 = automatic (adapts to frame rate), else lock to a tier. A ?q= URL lock still wins. */
+  setQuality(q: number) {
+    if (this.urlLocked) return;
+    if (q < 0) {
+      this.locked = false;
+      this.maxTier = this.tiers.length - 1;
+    } else {
+      this.locked = true;
+      this.tierIndex = Math.min(this.tiers.length - 1, q);
+      this.applyTier();
+    }
+  }
+
+  get tierNames() {
+    return this.tiers.map((t) => t.name);
+  }
+
+  /** User bloom multiplier (0..1.5) and screen-effects toggle. */
+  setUserEffects(bloom: number, effects: boolean) {
+    this.userBloom = bloom;
+    this.effectsOn = effects;
   }
 
   /** Cycle quality manually (and stop auto-raising past it). */
@@ -171,11 +198,15 @@ export class Renderer {
     u.uTime.value = time % 100;
     u.uHurt.value = hurt;
     u.uBoost.value = boost;
+    u.uFx.value = this.effectsOn ? 1 : 0;
   }
 
   /** Bloom strength per zone: punchy in space, softer in daylight so the sky doesn't wash out. */
   setBloom(strength: number) {
-    this.bloom.strength = strength;
+    this.bloom.strength = strength * this.userBloom;
+    const on = this.tier.bloom && this.userBloom > 0.01;
+    this.bloom.enabled = on;
+    this.scrub.enabled = on;
   }
 
   render(dt: number) {
