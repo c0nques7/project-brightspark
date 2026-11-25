@@ -62,7 +62,8 @@ function bakeNebula(renderer: THREE.WebGLRenderer, sunDir: THREE.Vector3, w: num
         vec3 d = vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));
         // Galactic band along a tilted great circle.
         vec3 bandN = normalize(vec3(0.25, 1.0, -0.35));
-        float band = exp(-pow(dot(d, bandN) * 3.2, 2.0));
+        float bd = dot(d, bandN) * 3.2;
+        float band = exp(-bd * bd); // (pow() with a negative base is undefined in GLSL)
         float warp = fbm(d * 2.0);
         float n1 = fbm(d * 3.0 + warp * 1.5);
         float n2 = fbm(d * 6.0 - warp);
@@ -83,6 +84,9 @@ function bakeNebula(renderer: THREE.WebGLRenderer, sunDir: THREE.Vector3, w: num
         // Warm scatter around the sun direction.
         float sd = max(dot(d, uSun), 0.0);
         col += vec3(0.35, 0.22, 0.10) * pow(sd, 12.0) * 0.6;
+        // Guard against NaN/Inf: a single bad texel becomes a glowing square once bloom spreads it.
+        col = clamp(col, 0.0, 4.0);
+        if (any(isnan(col))) col = vec3(0.0);
         gl_FragColor = vec4(col, 1.0);
       }
     `,

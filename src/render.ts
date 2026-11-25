@@ -55,11 +55,28 @@ const GradeShader = {
   `,
 };
 
+// Replaces NaN/Inf pixels and clamps fireflies before bloom. Bloom's blur chain turns a single
+// bad pixel (e.g. a degenerate normal in some shader) into a large glowing square.
+const ScrubShader = {
+  uniforms: { tDiffuse: { value: null as THREE.Texture | null } },
+  vertexShader: GradeShader.vertexShader,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0, 0.0, 0.0, 1.0);
+      gl_FragColor = vec4(min(c.rgb, vec3(64.0)), c.a);
+    }
+  `,
+};
+
 export class Renderer {
   readonly gl: THREE.WebGLRenderer;
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private grade: ShaderPass;
+  private scrub: ShaderPass;
   private tiers: Tier[];
   private tierIndex: number;
   private maxTier: number;
@@ -101,6 +118,8 @@ export class Renderer {
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: this.tier.msaa });
     this.composer = new EffectComposer(this.gl, rt);
     this.composer.addPass(new RenderPass(scene, camera));
+    this.scrub = new ShaderPass(ScrubShader);
+    this.composer.addPass(this.scrub);
     // Threshold is in linear HDR units; lit terrain stays under it, emissive bolts/engines/sun go over.
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.85, 0.55, 1.0);
     this.composer.addPass(this.bloom);
@@ -138,6 +157,7 @@ export class Renderer {
     this.composer.renderTarget1.samples = t.msaa;
     this.composer.renderTarget2.samples = t.msaa;
     this.bloom.enabled = t.bloom;
+    this.scrub.enabled = t.bloom;
     const bw = Math.max(1, Math.round(this.w * t.pixelRatio * t.bloomScale));
     const bh = Math.max(1, Math.round(this.h * t.pixelRatio * t.bloomScale));
     // UnrealBloomPass halves internally, so give it twice the target size.
