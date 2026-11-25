@@ -1,0 +1,21 @@
+{
+  "name": "project-brightspark",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "6-DoF space combat roguelike with Descent-style procedural mine clearing and planetary base building.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.172.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}
