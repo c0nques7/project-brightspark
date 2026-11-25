@@ -109,6 +109,8 @@ function bezel(w: number, h: number, r: number, depth: number, mat: THREE.Materi
 export class Cockpit {
   readonly root = new THREE.Group();
   private sway = new THREE.Group();
+  /** Wings and guns: follows the cockpit sway but is not stretched by fit(). */
+  private exterior = new THREE.Group();
   private frame = new THREE.Group();
   private metal: THREE.MeshStandardMaterial;
   private dark: THREE.MeshStandardMaterial;
@@ -264,52 +266,79 @@ export class Cockpit {
       this.frame.add(new THREE.Mesh(new THREE.TubeGeometry(rail, 16, 0.04, 6, false), this.metal));
     }
 
-    // ---- Twin cannons on the nose, outside the canopy, ending where the bolts spawn
-    // (GUN_OFFSET, see Game.firePlayer). Barrels recoil on each shot and the coils glow with heat.
+    // ---- Wings and wing-mounted cannons. These live in an unscaled "exterior" group (the cockpit
+    // root is stretched to fit the screen, the ship's wings shouldn't be), and the barrels end
+    // exactly at GUN_OFFSET, where Game.firePlayer spawns the bolts.
     this.gunMetal = new THREE.MeshStandardMaterial({ color: 0x4a515c, metalness: 0.85, roughness: 0.3, emissive: 0x05070a, envMapIntensity: 1.8, fog: false });
     this.coil = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.15, 0.9, 1.2), fog: false });
+    const hull = new THREE.MeshStandardMaterial({ color: 0x5a616c, metalness: 0.6, roughness: 0.45, emissive: 0x05070a, envMapIntensity: 1.4, fog: false });
+    this.camera.add(this.exterior);
+    const ex = this.exterior;
     const tip = GUN_OFFSET.z;
-    const barrelLen = 0.42;
+    const barrelLen = 0.5;
     for (const sx of [-1, 1]) {
+      // Swept wing, seen from the cockpit: root under the canopy sill, tip out at the gun pod.
+      const plan = new THREE.Shape();
+      plan.moveTo(sx * 0.9, 0.35);
+      plan.lineTo(sx * 0.9, 1.45);
+      plan.lineTo(sx * 1.95, 1.75);
+      plan.lineTo(sx * 2.15, 1.75);
+      plan.lineTo(sx * 2.15, 1.25);
+      plan.lineTo(sx * 1.45, 0.6);
+      plan.closePath();
+      const wingGeo = new THREE.ExtrudeGeometry(plan, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.02, bevelSegments: 2 });
+      wingGeo.rotateX(-Math.PI / 2); // shape y -> forward (-z), extrusion -> up
+      const wing = new THREE.Mesh(wingGeo, hull);
+      wing.position.y = -0.72;
+      wing.rotation.z = sx * 0.06; // slight dihedral: tips up
+      ex.add(wing);
+      // Leading-edge light strip.
+      const le = new THREE.LineCurve3(new THREE.Vector3(sx * 0.95, 0, -1.46), new THREE.Vector3(sx * 1.94, 0, -1.76));
+      const strip = new THREE.Mesh(new THREE.TubeGeometry(le, 8, 0.006, 4, false), this.coil);
+      strip.position.y = 0.075;
+      wing.add(strip);
+      // Panel line / spar along the wing.
+      const spar = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.012, 0.03), this.dark);
+      spar.position.set(sx * 1.45, 0.07, -1.05);
+      spar.rotation.y = sx * -0.25;
+      wing.add(spar);
+
+      // Gun pod on the wingtip.
       const gun = new THREE.Group();
       gun.position.set(sx * GUN_OFFSET.x, GUN_OFFSET.y, 0);
-      g.add(gun);
-      // Mount: a tapered housing rising from below the dash line.
-      const mount = bezel(0.12, 0.09, 0.03, 0.26, this.gunMetal);
-      mount.position.set(0, -0.035, tip + barrelLen - 0.02);
-      gun.add(mount);
-      const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.2), this.dark);
-      pylon.position.set(0, -0.12, tip + barrelLen + 0.12);
-      gun.add(pylon);
-      // Thin status light along the housing.
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.2), this.coil);
-      strip.position.set(-sx * 0.05, -0.0, tip + barrelLen + 0.11);
-      gun.add(strip);
-      // Recoiling part: shroud, barrel, coils and muzzle brake.
+      ex.add(gun);
+      const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.6, 14), this.gunMetal);
+      pod.rotation.x = Math.PI / 2;
+      pod.position.z = tip + barrelLen + 0.28;
+      gun.add(pod);
+      const podNose = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.075, 0.1, 14), this.gunMetal);
+      podNose.rotation.x = Math.PI / 2;
+      podNose.position.z = tip + barrelLen - 0.04;
+      gun.add(podNose);
+      const podLight = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.006, 0.45), this.coil);
+      podLight.position.set(-sx * 0.08, 0.02, tip + barrelLen + 0.28);
+      gun.add(podLight);
+      // Recoiling part: barrel, coils and muzzle brake.
       const slide = new THREE.Group();
       gun.add(slide);
-      const shroud = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.05, 0.2, 14), this.gunMetal);
-      shroud.rotation.x = Math.PI / 2;
-      shroud.position.z = tip + barrelLen - 0.08;
-      slide.add(shroud);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.03, barrelLen, 12), this.gunMetal);
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.036, barrelLen, 12), this.gunMetal);
       barrel.rotation.x = Math.PI / 2;
       barrel.position.z = tip + barrelLen / 2;
       slide.add(barrel);
       for (let i = 0; i < 3; i++) {
-        const c = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 6, 18), this.coil);
-        c.position.z = tip + 0.1 + i * 0.06;
+        const c = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.008, 6, 18), this.coil);
+        c.position.z = tip + 0.12 + i * 0.08;
         slide.add(c);
       }
-      const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.03, 0.05, 10), this.gunMetal);
+      const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.036, 0.06, 10), this.gunMetal);
       brake.rotation.x = Math.PI / 2;
-      brake.position.z = tip + 0.025;
+      brake.position.z = tip + 0.03;
       slide.add(brake);
       this.slides.push(slide);
     }
 
     // ---- Muzzle flashes at the barrel tips.
-    const muzzleGeo = new THREE.SphereGeometry(0.06, 8, 6);
+    const muzzleGeo = new THREE.SphereGeometry(0.08, 8, 6);
     for (const sx of [-1, 1]) {
       const muzzle = new THREE.Mesh(
         muzzleGeo,
@@ -317,9 +346,13 @@ export class Cockpit {
       );
       muzzle.position.copy(GUN_OFFSET).setX(sx * GUN_OFFSET.x);
       muzzle.scale.set(1, 1, 2);
-      g.add(muzzle);
+      ex.add(muzzle);
       this.muzzles.push(muzzle);
     }
+    this.exterior.traverse((o) => {
+      o.frustumCulled = false;
+      o.renderOrder = 9;
+    });
 
     // The cockpit must never be culled, and draws after the world.
     this.root.traverse((o) => {
@@ -345,6 +378,7 @@ export class Cockpit {
   setVisible(v: boolean) {
     this.enabled = v;
     this.root.visible = v;
+    this.exterior.visible = v && this.camera.aspect > 1;
   }
 
   /** Fit the layout to the current aspect ratio / FOV. */
@@ -358,6 +392,7 @@ export class Cockpit {
     this.root.position.y = -(halfH - REF_HALF_H * sy) * 0.9;
     // A narrow portrait view would be mostly arch; keep just the dash there.
     this.frame.visible = this.camera.aspect > 1;
+    this.exterior.visible = this.enabled && this.camera.aspect > 1;
   }
 
   fired(side: number) {
@@ -406,6 +441,8 @@ export class Cockpit {
     this.swayRot.z += (rollRate * 0.02 - this.swayRot.z) * (1 - Math.exp(-6 * dt));
     this.sway.position.copy(this.swayPos);
     this.sway.rotation.set(this.swayRot.x, this.swayRot.y, this.swayRot.z);
+    this.exterior.position.copy(this.swayPos);
+    this.exterior.rotation.copy(this.sway.rotation);
 
     // ---- Lighting cues.
     this.flash = Math.max(0, this.flash - dt * 12);

@@ -14,8 +14,8 @@ const SECTOR_RADIUS = 14000;
 /** Fights only happen near the asteroid field; drones won't follow you down to the planet. */
 const LEASH_RADIUS = 900;
 
-/** Right gun muzzle in camera space (outside the cockpit canopy); the left one mirrors x. */
-export const GUN_OFFSET = new THREE.Vector3(0.85, -0.26, -1.5);
+/** Right gun muzzle in camera space (wingtip cannon); the left one mirrors x. */
+export const GUN_OFFSET = new THREE.Vector3(2.05, -0.44, -2.15);
 
 // ---------- Tuning ----------
 export const PLAYER = {

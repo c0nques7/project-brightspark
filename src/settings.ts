@@ -34,6 +34,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
 };
 
 export interface Settings {
+  version: number;
   /** -1 = automatic, else a fixed tier index (0 low .. 3 ultra). */
   quality: number;
   /** Multiplier on the bloom strength, 0..1.5. */
@@ -51,10 +52,11 @@ export interface Settings {
 }
 
 export const DEFAULTS: Settings = {
+  version: 2,
   quality: -1,
   bloom: 1,
   effects: true,
-  fov: 75,
+  fov: 90,
   cockpit: true,
   volume: 0.7,
   muted: false,
@@ -73,9 +75,11 @@ function load(): Settings {
     if (raw) {
       const saved = JSON.parse(raw) as Partial<Settings>;
       for (const k of Object.keys(DEFAULTS) as (keyof Settings)[]) {
-        if (k === 'bindings') continue;
+        if (k === 'bindings' || k === 'version') continue;
         if (saved[k] !== undefined && typeof saved[k] === typeof DEFAULTS[k]) (s as unknown as Record<string, unknown>)[k] = saved[k];
       }
+      // v2: the default field of view went from 75 to 90; move anyone still on the old default.
+      if ((saved.version ?? 1) < 2 && saved.fov === 75) s.fov = 90;
       if (saved.bindings) for (const a of ACTIONS) if (Array.isArray(saved.bindings[a.id])) s.bindings[a.id] = saved.bindings[a.id].slice(0, 2);
     } else {
       // Carry over the older single-purpose keys.
