@@ -119,9 +119,10 @@ export class Cockpit {
 
     // Energy (left) and shield (right) strips under the coaming, readouts between them.
     const stripGeo = new THREE.PlaneGeometry(0.56, 0.045);
-    this.energyBar = this.addScreen(panel, stripGeo, 512, 40, -0.42, 0.16, 1.6);
-    this.shieldBar = this.addScreen(panel, stripGeo, 512, 40, 0.42, 0.16, 1.6);
-    this.readout = this.addScreen(panel, new THREE.PlaneGeometry(0.15, 0.08), 160, 85, 0, 0.16, 1.4);
+    // Kept just under the bloom threshold so they read as lit, not blown out.
+    this.energyBar = this.addScreen(panel, stripGeo, 512, 40, -0.42, 0.16, 0.85);
+    this.shieldBar = this.addScreen(panel, stripGeo, 512, 40, 0.42, 0.16, 0.85);
+    this.readout = this.addScreen(panel, new THREE.PlaneGeometry(0.15, 0.08), 160, 85, 0, 0.16, 1.0);
     for (const x of [-0.42, 0.42]) this.addBezel(panel, 0.59, 0.07, 0.01, x, 0.16);
     this.addBezel(panel, 0.18, 0.11, 0.02, 0, 0.16);
 
@@ -360,9 +361,9 @@ export class Cockpit {
       }
       s.tex.needsUpdate = true;
     };
-    strip(this.energyBar, p.energy / PLAYER.energy, '#ffe08a', '#ff7a1a', false);
+    strip(this.energyBar, p.energy / PLAYER.energy, '#ffc04d', '#e8650f', false);
     const shieldLow = p.shield < PLAYER.shield * 0.25;
-    strip(this.shieldBar, p.shield / PLAYER.shield, shieldLow ? '#ff9a7a' : '#bff4ff', shieldLow ? RED : '#2a9dff', true);
+    strip(this.shieldBar, p.shield / PLAYER.shield, shieldLow ? '#ff9a7a' : '#6fd0ff', shieldLow ? RED : '#1f7fe0', true);
 
     const s = this.readout;
     const c = s.ctx;

@@ -7,6 +7,8 @@ import { Renderer } from './render';
 import { Game, PLAYER } from './game';
 import { Hud, type Waypoint } from './hud';
 import { Input } from './input';
+import { Menu } from './menu';
+import { onSettingsChange, saveSettings, settings } from './settings';
 import { Sfx } from './sfx';
 import { Dust, Sky, makeRocks } from './world';
 
@@ -88,7 +90,7 @@ const zoneWaypoint: Waypoint = { pos: new THREE.Vector3(0, 0, 0), label: 'COMBAT
 
 const controlsHelp = isTouch
   ? 'Left stick: thrust & strafe · Right stick: aim · Guns fire automatically when a target is under the crosshair · BOOST to sprint · CRUISE to travel to the planet and its mine'
-  : 'Mouse: aim · Left click: fire · W/S: thrust · A/D: strafe · Space/C: up/down · Q/E: roll · Shift: boost · X: cruise to the planet and its mine · V: cockpit view · G: graphics quality · M: mute · Esc: pause';
+  : 'Mouse: aim · Left click: fire · W/S: thrust · A/D: strafe · Space/C: up/down · Q/E: roll · Shift: boost · X: cruise to the planet and its mine · V: cockpit view · M: mute · Esc: menu (graphics, controls, full screen)';
 
 function showOverlay(title: string, body: string, action: string) {
   overlayTitle.textContent = title;
@@ -99,39 +101,30 @@ function showOverlay(title: string, body: string, action: string) {
   touchRoot.classList.add('hidden');
 }
 
-// ---------- View & quality toggles ----------
-function setCockpit(on: boolean) {
-  cockpit.setVisible(on);
-  hudRoot.classList.toggle('cockpit', on);
-  try {
-    localStorage.setItem('bs-cockpit', on ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
+// ---------- Settings ----------
+function applySettings() {
+  view.setQuality(settings.quality);
+  view.setUserEffects(settings.bloom, settings.effects);
+  cockpit.setVisible(settings.cockpit);
+  hudRoot.classList.toggle('cockpit', settings.cockpit);
+  sfx.setVolume(settings.muted ? 0 : settings.volume);
+  resize();
 }
-let cockpitPref = true;
-try {
-  cockpitPref = localStorage.getItem('bs-cockpit') !== '0';
-} catch {
-  /* ignore */
-}
-setCockpit(cockpitPref);
+onSettingsChange(applySettings);
 view.onTierChange = (t) => {
   sky.setPixelRatio(t.pixelRatio);
-  if (game.state === 'playing') hud.message('', `GRAPHICS ${t.name}`, 1.2);
+  if (game.state === 'playing' && settings.quality < 0) hud.message('', `GRAPHICS ${t.name}`, 1.2);
 };
 sky.setPixelRatio(view.tier.pixelRatio);
-let muted = false;
 window.addEventListener('keydown', (e) => {
-  if (e.repeat) return;
-  if (e.code === 'KeyV') {
-    setCockpit(!cockpit.enabled);
-    sfx.blip(cockpit.enabled);
-  } else if (e.code === 'KeyG') {
-    view.cycleQuality();
-  } else if (e.code === 'KeyM') {
-    muted = !muted;
-    sfx.setMuted(muted);
+  if (e.repeat || game.state !== 'playing') return;
+  if (settings.bindings.cockpit.includes(e.code)) {
+    settings.cockpit = !settings.cockpit;
+    saveSettings();
+    sfx.blip(settings.cockpit);
+  } else if (settings.bindings.mute.includes(e.code)) {
+    settings.muted = !settings.muted;
+    saveSettings();
   }
 });
 
@@ -141,12 +134,45 @@ function hideOverlay() {
   touchRoot.classList.remove('hidden');
 }
 
+// ---------- Pause menu ----------
+const menu = new Menu({
+  qualityNames: view.tierNames,
+  touch: isTouch,
+  resume() {
+    menu.hide();
+    if (game.state !== 'paused') return; // opened from the title screen: just close
+    game.state = 'playing';
+    sfx.setSuspended(false);
+    hideOverlay();
+    input.requestLock();
+  },
+  quit() {
+    menu.hide();
+    game.state = 'title';
+    sfx.setSuspended(false);
+    showOverlay('PROJECT: BRIGHTSPARK', controlsHelp, isTouch ? 'Tap to launch' : 'Click to launch');
+  },
+});
+
 function pause() {
   if (game.state !== 'playing') return;
   game.state = 'paused';
   sfx.setSuspended(true);
-  showOverlay('PAUSED', controlsHelp, isTouch ? 'Tap to resume' : 'Click to resume');
+  if (document.pointerLockElement) document.exitPointerLock();
+  hud.setVisible(false);
+  touchRoot.classList.add('hidden');
+  menu.show('pause');
 }
+
+// Settings button on the title / game-over screen.
+const settingsBtn = document.createElement('button');
+settingsBtn.className = 'overlay-settings';
+settingsBtn.textContent = 'SETTINGS';
+settingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  menu.show('title');
+});
+overlayAction.insertAdjacentElement('afterend', settingsBtn);
 
 function goFullscreen() {
   if (!isTouch || document.fullscreenElement) return;
@@ -155,6 +181,7 @@ function goFullscreen() {
 }
 
 overlay.addEventListener('click', () => {
+  if (menu.open) return;
   sfx.unlock();
   sfx.setSuspended(false);
   goFullscreen();
@@ -180,13 +207,13 @@ function resize() {
   const h = window.innerHeight;
   camera.aspect = w / h;
   // Keep a usable horizontal view in portrait.
-  camera.fov = w < h ? 90 : 75;
+  camera.fov = w < h ? settings.fov + 15 : settings.fov;
   camera.updateProjectionMatrix();
   view.setSize(w, h);
   cockpit.fit();
 }
 window.addEventListener('resize', resize);
-resize();
+applySettings();
 
 // ---------- Loop ----------
 let last = performance.now();

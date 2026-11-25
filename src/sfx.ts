@@ -85,8 +85,9 @@ export class Sfx {
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
-  setMuted(m: boolean) {
-    this.volume = m ? 0 : 0.5;
+  /** Master volume 0..1 (0.5 is the original mix level at 0.7). */
+  setVolume(v: number) {
+    this.volume = Math.max(0, v) * 0.72;
     if (this.ctx && this.master) this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.05);
   }
 
