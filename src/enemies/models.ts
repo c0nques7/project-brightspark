@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Low-poly models for every enemy type. Geometry and most materials are shared across instances;
 // each enemy gets its own body material so it can flash when hit. HDR colours (>1) on MeshBasic
@@ -26,17 +27,49 @@ function mesh(g: THREE.BufferGeometry, m: THREE.Material, parent?: THREE.Object3
   return o;
 }
 
-// ---------- Warden: the baseline ringed fighter (already in the game) ----------
+// ---------- Weapon and tool parts shared by several models ----------
+/** Merge several transformed primitives into one geometry (one draw call per material). */
+function merged(...parts: THREE.BufferGeometry[]) {
+  const g = mergeGeometries(parts, false);
+  if (!g) throw new Error('mergeGeometries failed: mismatched attributes');
+  for (const p of parts) p.dispose();
+  return g;
+}
+/** Cylinder along +z, from z0 to z0 + len. */
+function tube(r: number, len: number, z0 = 0, seg = 6, r2 = r) {
+  return new THREE.CylinderGeometry(r2, r, len, seg, 1).rotateX(Math.PI / 2).translate(0, 0, z0 + len / 2);
+}
+function box(w: number, h: number, d: number, x = 0, y = 0, z = 0) {
+  return new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+}
+/** A gun pod with a barrel: housing centred at the origin, barrel pointing down +z. Muzzle at z = podLen / 2 + barrelLen. */
+function cannon(podW: number, podLen: number, barrelR: number, barrelLen: number) {
+  return merged(box(podW, podW, podLen), tube(barrelR * 1.6, 0.25, podLen / 2 - 0.05), tube(barrelR, barrelLen, podLen / 2));
+}
+const gunMetal = metal(0x1c1e23, 0.8, 0.35);
+const muzzle = new THREE.OctahedronGeometry(0.16, 0);
+
+/** Add a mesh at a position (and optional euler) to a parent. */
+function place(g: THREE.BufferGeometry, m: THREE.Material, parent: THREE.Object3D, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) {
+  const o = mesh(g, m, parent);
+  o.position.set(x, y, z);
+  o.rotation.set(rx, ry, rz);
+  return o;
+}
+
+// ---------- Warden: the baseline ringed fighter, now with wing cannons ----------
 const W = {
   body: new THREE.IcosahedronGeometry(1.6, 0),
   ring: new THREE.TorusGeometry(2.1, 0.22, 6, 16),
   eye: new THREE.SphereGeometry(0.55, 12, 8),
   wing: new THREE.BoxGeometry(3.6, 0.15, 1.1),
   thrust: new THREE.IcosahedronGeometry(1, 0),
+  gun: cannon(0.42, 1.3, 0.1, 1.1),
   ringMat: metal(0x3b3f48, 0.7, 0.4),
   eyeMat: glow(hdr(5, 0.9, 0.5)),
   wingMat: metal(0x272a31),
   thrustMat: additive(hdr(3.5, 1.2, 0.5)),
+  muzzleMat: glow(hdr(4, 0.8, 0.4)),
 };
 export function wardenModel(): Model {
   const root = new THREE.Group();
@@ -45,6 +78,10 @@ export function wardenModel(): Model {
   const ring = mesh(W.ring, W.ringMat, root);
   mesh(W.eye, W.eyeMat, root).position.z = 1.3;
   mesh(W.wing, W.wingMat, root);
+  for (const x of [-1.75, 1.75]) {
+    place(W.gun, gunMetal, root, x, -0.32, 0.2);
+    place(muzzle, W.muzzleMat, root, x, -0.32, 2.05);
+  }
   const t = mesh(W.thrust, W.thrustMat, root);
   t.position.z = -1.5;
   t.scale.set(0.45, 0.45, 0.9);
@@ -52,51 +89,61 @@ export function wardenModel(): Model {
   return { root, body, parts: { ring } };
 }
 
-// ---------- Gnat: tiny swarming dart ----------
+// ---------- Gnat: swarming fighter, chunky enough to hit, with wingtip needle guns ----------
 const G = {
-  hull: (() => {
-    // A flat three-sided dart pointing down +z.
-    const g = new THREE.ConeGeometry(0.75, 2.4, 3, 1);
-    g.rotateX(Math.PI / 2);
-    g.scale(1.3, 0.45, 1);
-    return g;
-  })(),
-  fin: new THREE.BoxGeometry(2.6, 0.06, 0.5),
-  tail: new THREE.OctahedronGeometry(0.32, 0),
+  hull: merged(
+    // Wedge fuselage pointing down +z, with a raised spine so it reads from every angle.
+    new THREE.ConeGeometry(1.25, 4.2, 4, 1).rotateX(Math.PI / 2).rotateZ(Math.PI / 4).scale(1.25, 0.8, 1),
+    box(0.9, 0.7, 2.2, 0, 0.55, -0.5),
+  ),
+  wing: merged(
+    box(5.2, 0.14, 1.3, 0, 0, -0.7),
+    box(0.14, 1.2, 1.1, 2.6, 0.45, -0.9),
+    box(0.14, 1.2, 1.1, -2.6, 0.45, -0.9),
+  ),
+  canopy: new THREE.OctahedronGeometry(0.45, 0).scale(1, 0.6, 1.6),
+  gun: cannon(0.3, 0.9, 0.08, 1.4),
+  tail: new THREE.OctahedronGeometry(0.5, 0),
   tailMat: additive(hdr(3.2, 2.4, 0.4)),
+  canopyMat: glow(hdr(3.4, 2.6, 0.5)),
   finMat: metal(0x1d2026),
+  muzzleMat: glow(hdr(3.6, 2.8, 0.6)),
 };
 export function gnatModel(): Model {
   const root = new THREE.Group();
   const body = metal(0xc9a44a, 0.55, 0.35);
   mesh(G.hull, body, root);
-  const fin = mesh(G.fin, G.finMat, root);
-  fin.position.z = -0.45;
-  const tail = mesh(G.tail, G.tailMat, root);
-  tail.position.z = -1.25;
+  place(G.wing, G.finMat, root, 0, 0, 0);
+  place(G.canopy, G.canopyMat, root, 0, 0.75, 0.4);
+  for (const x of [-2.6, 2.6]) {
+    place(G.gun, gunMetal, root, x, -0.12, -0.4);
+    place(muzzle, G.muzzleMat, root, x, -0.12, 1.5);
+  }
+  const tail = place(G.tail, G.tailMat, root, 0, 0, -2.2);
   tail.scale.set(1, 1, 2);
   return { root, body, parts: { tail } };
 }
 
 // ---------- Bulwark: armoured brute, shield plate in front, weak core behind ----------
 const B = {
-  hull: (() => {
-    const g = new THREE.CylinderGeometry(2.6, 3.1, 5.5, 6, 1);
-    g.rotateX(Math.PI / 2);
-    return g;
-  })(),
-  plate: (() => {
-    const g = new THREE.CylinderGeometry(4.2, 4.6, 0.8, 6, 1);
-    g.rotateX(Math.PI / 2);
-    return g;
-  })(),
+  hull: new THREE.CylinderGeometry(2.6, 3.1, 5.5, 6, 1).rotateX(Math.PI / 2),
+  plate: new THREE.CylinderGeometry(4.2, 4.6, 0.8, 6, 1).rotateX(Math.PI / 2),
   stripe: new THREE.BoxGeometry(6.8, 0.35, 0.2),
   core: new THREE.IcosahedronGeometry(1.25, 1),
   cage: new THREE.TorusGeometry(1.6, 0.18, 4, 6),
-  gun: new THREE.BoxGeometry(0.45, 0.45, 2.2),
+  // Heavy side cannons on pylons that reach past the shield plate.
+  sideGun: merged(box(1.9, 0.5, 0.9, 0.95, 0, 0), cannon(1.0, 3.4, 0.24, 3.2).translate(2.2, 0, 0.6)),
+  // Dorsal twin turret.
+  turret: merged(
+    new THREE.CylinderGeometry(1.2, 1.5, 0.8, 8, 1),
+    box(1.6, 0.9, 1.8, 0, 0.75, 0.2),
+    tube(0.15, 4.2, 0.9).translate(-0.4, 0.8, 0),
+    tube(0.15, 4.2, 0.9).translate(0.4, 0.8, 0),
+  ),
   plateMat: metal(0x6b5a3a, 0.75, 0.35),
   stripeMat: glow(hdr(3.2, 1.9, 0.3)),
   coreMat: glow(hdr(4.5, 0.6, 2.4)),
+  muzzleMat: glow(hdr(4, 2.2, 0.4)),
   dark: metal(0x22252b, 0.7, 0.5),
 };
 export function bulwarkModel(): Model {
@@ -105,37 +152,33 @@ export function bulwarkModel(): Model {
   mesh(B.hull, body, root);
   const plate = mesh(B.plate, B.plateMat, root);
   plate.position.z = 3.1;
-  for (const y of [-1.2, 1.2]) {
-    const s = mesh(B.stripe, B.stripeMat, root);
-    s.position.set(0, y, 3.55);
+  for (const y of [-1.2, 1.2]) place(B.stripe, B.stripeMat, root, 0, y, 3.55);
+  const core = place(B.core, B.coreMat, root, 0, 0, -3.1);
+  place(B.cage, B.dark, root, 0, 0, -3.1);
+  for (const side of [-1, 1]) {
+    const g = place(B.sideGun, B.dark, root, side * 2.6, -0.8, 0);
+    g.scale.x = side;
+    place(muzzle, B.muzzleMat, root, side * 4.8, -0.8, 5.95).scale.setScalar(1.6);
   }
-  const core = mesh(B.core, B.coreMat, root);
-  core.position.z = -3.1;
-  const cage = mesh(B.cage, B.dark, root);
-  cage.position.z = -3.1;
-  for (const x of [-3.4, 3.4]) {
-    const gun = mesh(B.gun, B.dark, root);
-    gun.position.set(x, -0.6, 1.6);
-  }
-  return { root, body, parts: { core, plate } };
+  const turret = place(B.turret, B.dark, root, 0, 2.9, 0.2);
+  return { root, body, parts: { core, plate, turret } };
 }
 
-// ---------- Shade: cloaking ambusher, blade-like, translucent when phased ----------
+// ---------- Shade: cloaking ambusher with an underslung rail lance ----------
 const S = {
-  hull: (() => {
-    const g = new THREE.OctahedronGeometry(1, 0);
-    g.scale(0.9, 0.45, 2.6);
-    return g;
-  })(),
-  blade: (() => {
-    // Swept-back crescent blade made from a partial torus.
-    const g = new THREE.TorusGeometry(2.6, 0.16, 3, 10, Math.PI * 0.75);
-    g.rotateZ(Math.PI * 0.125 + Math.PI);
-    g.rotateX(Math.PI / 2);
-    g.translate(0, 0, 1.2);
-    return g;
-  })(),
+  hull: new THREE.OctahedronGeometry(1, 0).scale(0.9, 0.45, 2.6),
+  blade: new THREE.TorusGeometry(2.6, 0.16, 3, 10, Math.PI * 0.75)
+    .rotateZ(Math.PI * 0.125 + Math.PI)
+    .rotateX(Math.PI / 2)
+    .translate(0, 0, 1.2),
   slit: new THREE.BoxGeometry(1.1, 0.12, 0.12),
+  // Twin rails with a housing; the shot charges between them.
+  lance: merged(
+    box(0.7, 0.45, 1.6, 0, 0, -0.2),
+    box(0.12, 0.16, 4.4, -0.24, 0, 2.2),
+    box(0.12, 0.16, 4.4, 0.24, 0, 2.2),
+  ),
+  coil: new THREE.TorusGeometry(0.42, 0.07, 4, 12),
   edgeMat: glow(hdr(1.8, 0.6, 4.5)),
   slitMat: glow(hdr(4, 1.6, 5)),
 };
@@ -144,23 +187,28 @@ export function shadeModel(): Model {
   const body = new THREE.MeshStandardMaterial({ color: 0x4a3d66, metalness: 0.85, roughness: 0.25, flatShading: true, transparent: true });
   mesh(S.hull, body, root);
   const blade = mesh(S.blade, S.edgeMat, root);
-  const slit = mesh(S.slit, S.slitMat, root);
-  slit.position.set(0, 0.32, 1.4);
+  const slit = place(S.slit, S.slitMat, root, 0, 0.32, 1.4);
+  place(S.lance, gunMetal, root, 0, -0.62, 0.2);
+  for (const z of [1.4, 2.6, 3.8]) place(S.coil, S.edgeMat, root, 0, -0.62, z);
+  const charge = place(muzzle, S.slitMat, root, 0, -0.62, 4.6);
+  charge.scale.setScalar(1.8);
   root.scale.setScalar(1.2);
-  return { root, body, parts: { blade, slit } };
+  return { root, body, parts: { blade, slit, charge } };
 }
 
-// ---------- Ember: kamikaze pod, molten core inside a spiked cage ----------
+// ---------- Ember: kamikaze pod, molten core inside a spiked cage, ram drill in front ----------
 const E = {
   cage: new THREE.IcosahedronGeometry(1.5, 0),
   core: new THREE.IcosahedronGeometry(0.95, 1),
-  spike: (() => {
-    const g = new THREE.ConeGeometry(0.22, 1.1, 4);
-    g.translate(0, 1.9, 0);
-    return g;
-  })(),
+  spike: new THREE.ConeGeometry(0.22, 1.1, 4).translate(0, 1.9, 0),
+  drill: merged(
+    new THREE.ConeGeometry(0.85, 2.6, 6, 3).rotateX(Math.PI / 2).translate(0, 0, 2.6),
+    tube(0.95, 0.35, 1.0, 8),
+  ),
+  collar: new THREE.TorusGeometry(1.0, 0.16, 4, 8),
   coreMat: glow(hdr(3, 0.9, 0.15)),
   spikeMat: metal(0x2b2420, 0.7, 0.5),
+  drillMat: metal(0x8c8f96, 0.9, 0.25),
 };
 export function emberModel(): Model {
   const root = new THREE.Group();
@@ -169,35 +217,34 @@ export function emberModel(): Model {
   const core = mesh(E.core, E.coreMat, root);
   const spikes = new THREE.Group();
   root.add(spikes);
-  const dirs = [[0, 0, 0], [Math.PI / 2, 0, 0], [-Math.PI / 2, 0, 0], [Math.PI, 0, 0], [0, 0, Math.PI / 2], [0, 0, -Math.PI / 2]];
+  // Five spikes; the front one is replaced by the drill.
+  const dirs = [[0, 0, 0], [-Math.PI / 2, 0, 0], [Math.PI, 0, 0], [0, 0, Math.PI / 2], [0, 0, -Math.PI / 2]];
   for (const [x, y, z] of dirs) mesh(E.spike, E.spikeMat, spikes).rotation.set(x, y, z);
-  return { root, body, parts: { core, spikes } };
+  const drill = mesh(E.drill, E.drillMat, root);
+  place(E.collar, E.spikeMat, root, 0, 0, 1.25);
+  return { root, body, parts: { core, spikes, drill } };
 }
 
-// ---------- Tick: wall-clinging crawler for the mines ----------
+// ---------- Tick: wall-clinging crawler for the mines, with twin rock drills and a cutter ----------
 const T = {
-  body: (() => {
-    const g = new THREE.IcosahedronGeometry(1.2, 0);
-    g.scale(1.25, 0.6, 1.5);
-    return g;
-  })(),
+  body: new THREE.IcosahedronGeometry(1.2, 0).scale(1.25, 0.6, 1.5),
+  // Spider leg: upper segment rises outward to a knee, lower segment angles down to the foot.
   leg: (() => {
-    // A bent leg: two thin boxes merged into one geometry by hand.
-    const a = new THREE.BoxGeometry(1.6, 0.16, 0.16).translate(0.8, 0.35, 0).rotateZ(0.35);
-    const b = new THREE.BoxGeometry(0.16, 1.4, 0.16).translate(1.65, -0.2, 0);
-    const pos = [...a.attributes.position.array, ...b.attributes.position.array];
-    const nor = [...a.attributes.normal.array, ...b.attributes.normal.array];
-    const idx = [...a.index!.array, ...[...b.index!.array].map((i) => i + a.attributes.position.count)];
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-    g.setIndex(idx);
-    return g;
+    const up = 0.65;
+    const upper = box(1.5, 0.2, 0.2, 0.75, 0, 0).rotateZ(up);
+    const kx = 1.5 * Math.cos(up);
+    const ky = 1.5 * Math.sin(up);
+    const lo = -1.25;
+    const lower = new THREE.ConeGeometry(0.13, 2.0, 4, 1).translate(0, -1.0, 0).rotateZ(Math.PI / 2 + lo).translate(kx, ky, 0);
+    // ConeGeometry has no index-free mismatch issues with BoxGeometry, but needs matching attributes.
+    return merged(upper, lower);
   })(),
   eye: new THREE.SphereGeometry(0.22, 8, 6),
-  mandible: new THREE.ConeGeometry(0.16, 0.9, 4),
+  drill: merged(new THREE.ConeGeometry(0.32, 1.5, 6, 2).rotateX(Math.PI / 2).translate(0, 0, 0.75), tube(0.36, 0.3, -0.2, 6)),
+  cutter: merged(new THREE.CylinderGeometry(0.75, 0.75, 0.1, 10, 1).rotateZ(Math.PI / 2), box(0.18, 0.18, 1.0, 0, 0, -0.5)),
   legMat: metal(0x2a221c, 0.5, 0.6),
   eyeMat: glow(hdr(0.8, 4.5, 0.9)),
+  toolMat: metal(0x9aa0a8, 0.9, 0.25),
 };
 export function tickModel(): Model {
   const root = new THREE.Group();
@@ -209,15 +256,14 @@ export function tickModel(): Model {
     const side = i < 3 ? 1 : -1;
     const k = (i % 3) - 1;
     const leg = mesh(T.leg, T.legMat, legs);
-    leg.rotation.y = (side > 0 ? 0 : Math.PI) + k * 0.6 * side;
+    leg.position.set(side * 0.9, 0, k * 0.8);
+    leg.rotation.y = (side > 0 ? 0 : Math.PI) - k * 0.55 * side;
   }
-  for (const x of [-0.42, 0.42]) {
-    mesh(T.eye, T.eyeMat, root).position.set(x, 0.25, 1.55);
-    const m = mesh(T.mandible, T.legMat, root);
-    m.position.set(x * 0.8, -0.2, 1.9);
-    m.rotation.x = Math.PI / 2;
-  }
-  return { root, body, parts: { legs } };
+  for (const x of [-0.42, 0.42]) place(T.eye, T.eyeMat, root, x, 0.28, 1.55);
+  const drills: THREE.Object3D[] = [];
+  for (const x of [-0.55, 0.55]) drills.push(place(T.drill, T.toolMat, root, x, -0.25, 1.7));
+  const cutter = place(T.cutter, T.toolMat, root, 0, -0.65, 2.1);
+  return { root, body, parts: { legs, drillL: drills[0], drillR: drills[1], cutter } };
 }
 
 /** Searchlight cone: additive, fades along its length and toward its edges. uColor is set per lantern. */
@@ -266,6 +312,15 @@ const L = {
     return g;
   })(),
   ringMat: metal(0x3a3530, 0.8, 0.3),
+  // Twin guns slung under the lens, so they aim wherever the beam looks.
+  guns: merged(box(1.5, 0.35, 0.9, 0, 0, 0), tube(0.09, 1.3, 0.4).translate(-0.45, 0, 0), tube(0.09, 1.3, 0.4).translate(0.45, 0, 0)),
+  // Ore grabber: a jointed claw arm hanging below the body.
+  claw: merged(
+    box(0.18, 1.4, 0.18, 0, -0.7, 0),
+    box(0.16, 0.9, 0.16, 0, -0.45, 0).rotateX(0.7).translate(0, -1.3, 0),
+    new THREE.ConeGeometry(0.12, 0.5, 4).rotateX(Math.PI).translate(0, -2.25, 0.55),
+  ),
+  muzzleMat: glow(hdr(4.5, 3.6, 1.4)),
 };
 export function lanternModel(): Model {
   const root = new THREE.Group();
@@ -281,6 +336,12 @@ export function lanternModel(): Model {
   const lensMat = glow(hdr(4.5, 4, 2.6));
   const lens = mesh(L.lens, lensMat, head);
   lens.position.z = 1.45;
+  place(L.guns, gunMetal, head, 0, -0.85, 1.0);
+  for (const x of [-0.45, 0.45]) place(muzzle, L.muzzleMat, head, x, -0.85, 2.7);
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + Math.PI / 6;
+    place(L.claw, gunMetal, root, Math.sin(a) * 0.9, -1.05, Math.cos(a) * 0.9, 0, a, 0);
+  }
   const beamMat = beamMaterial();
   const beam = mesh(L.beam, beamMat, head);
   beam.position.z = 1.45;

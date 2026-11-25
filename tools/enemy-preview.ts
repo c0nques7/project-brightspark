@@ -49,7 +49,7 @@ const size = box.getSize(new THREE.Vector3()).length();
 const center = box.getCenter(new THREE.Vector3());
 const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 500);
 if (beam) beamParent!.add(beam);
-const fit = kind === 'lantern' ? 1.6 : 1;
+const fit = kind === 'lantern' ? 1.15 : 1;
 camera.position.copy(center).add(new THREE.Vector3(0, size * 0.12, size * 1.55 * fit));
 camera.lookAt(center);
 
