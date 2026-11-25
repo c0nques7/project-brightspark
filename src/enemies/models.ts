@@ -149,6 +149,7 @@ const B = {
 export function bulwarkModel(): Model {
   const root = new THREE.Group();
   const body = metal(0x5d6470, 0.65, 0.4);
+  body.emissive.setRGB(0.04, 0.045, 0.06);
   mesh(B.hull, body, root);
   const plate = mesh(B.plate, B.plateMat, root);
   plate.position.z = 3.1;
@@ -186,14 +187,17 @@ export function shadeModel(): Model {
   const root = new THREE.Group();
   const body = new THREE.MeshStandardMaterial({ color: 0x4a3d66, metalness: 0.85, roughness: 0.25, flatShading: true, transparent: true });
   mesh(S.hull, body, root);
-  const blade = mesh(S.blade, S.edgeMat, root);
-  const slit = place(S.slit, S.slitMat, root, 0, 0.32, 1.4);
-  place(S.lance, gunMetal, root, 0, -0.62, 0.2);
-  for (const z of [1.4, 2.6, 3.8]) place(S.coil, S.edgeMat, root, 0, -0.62, z);
-  const charge = place(muzzle, S.slitMat, root, 0, -0.62, 4.6);
+  // Everything except the hull sits in `gear`, which is hidden while cloaked.
+  const gear = new THREE.Group();
+  root.add(gear);
+  const blade = mesh(S.blade, S.edgeMat, gear);
+  const slit = place(S.slit, S.slitMat, gear, 0, 0.32, 1.4);
+  place(S.lance, gunMetal, gear, 0, -0.62, 0.2);
+  for (const z of [1.4, 2.6, 3.8]) place(S.coil, S.edgeMat, gear, 0, -0.62, z);
+  const charge = place(muzzle, S.slitMat, gear, 0, -0.62, 4.6);
   charge.scale.setScalar(1.8);
   root.scale.setScalar(1.2);
-  return { root, body, parts: { blade, slit, charge } };
+  return { root, body, parts: { blade, slit, charge, gear } };
 }
 
 // ---------- Ember: kamikaze pod, molten core inside a spiked cage, ram drill in front ----------
@@ -363,7 +367,8 @@ const H = {
 };
 export function heartforgeModel(): Model {
   const root = new THREE.Group();
-  const body = new THREE.MeshStandardMaterial({ color: 0x55504c, metalness: 0.75, roughness: 0.4, flatShading: true, wireframe: false });
+  // A faint ember glow on the shell so it reads in the dark mine.
+  const body = new THREE.MeshStandardMaterial({ color: 0x55504c, metalness: 0.75, roughness: 0.4, flatShading: true, emissive: new THREE.Color(0.06, 0.02, 0.01) });
   mesh(H.inner, H.innerMat, root);
   const shell = mesh(H.shell, body, root);
   shell.scale.set(1, 0.92, 1);
