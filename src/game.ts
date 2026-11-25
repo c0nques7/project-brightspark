@@ -15,7 +15,7 @@ const SECTOR_RADIUS = 14000;
 const LEASH_RADIUS = 900;
 
 /** Right gun muzzle in camera space (outside the cockpit canopy); the left one mirrors x. */
-export const GUN_OFFSET = new THREE.Vector3(0.95, -0.36, -1.5);
+export const GUN_OFFSET = new THREE.Vector3(0.85, -0.26, -1.5);
 
 // ---------- Tuning ----------
 export const PLAYER = {

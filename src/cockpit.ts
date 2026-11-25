@@ -21,6 +21,7 @@ const RED = '#ff4a30';
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
 const _v = new THREE.Vector3();
+const shotPulse = (r: number[]) => Math.max(r[0], r[1]) * 0.8;
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 
@@ -41,6 +42,46 @@ class Screen {
     this.mat = new THREE.MeshBasicMaterial({ map: this.tex, color: new THREE.Color(glow, glow, glow), fog: false });
     this.mesh = new THREE.Mesh(geo, this.mat);
   }
+}
+
+/**
+ * A disc bulged outward like a CRT face: planar UVs (so the canvas maps straight on) with the
+ * surface pushed forward by a sphere of the given radius.
+ */
+function domeGeometry(r: number, sphereR: number, offset = 0) {
+  const geo = new THREE.RingGeometry(0, r, 64, 16);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const edge = Math.sqrt(sphereR * sphereR - r * r);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    pos.setZ(i, Math.sqrt(Math.max(0, sphereR * sphereR - x * x - y * y)) - edge + offset);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Static glass glare for the radar: a soft highlight arc near the top-left and a rim sheen. */
+function glareTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(95, 80, 4, 95, 80, 120);
+  grd.addColorStop(0, 'rgba(255,255,255,0.55)');
+  grd.addColorStop(0.25, 'rgba(220,245,255,0.18)');
+  grd.addColorStop(1, 'rgba(220,245,255,0)');
+  g.fillStyle = grd;
+  g.beginPath();
+  g.ellipse(100, 82, 92, 50, -0.6, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = 'rgba(200,240,255,0.22)';
+  g.lineWidth = 5;
+  g.beginPath();
+  g.arc(128, 128, 120, Math.PI * 0.9, Math.PI * 1.55);
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 /** Rounded-rectangle shape for bezels and the centre pod. */
@@ -73,6 +114,10 @@ export class Cockpit {
   private dark: THREE.MeshStandardMaterial;
   private accent: THREE.MeshBasicMaterial;
   private muzzles: THREE.Mesh[] = [];
+  private slides: THREE.Group[] = [];
+  private recoil = [0, 0];
+  private gunMetal!: THREE.MeshStandardMaterial;
+  private coil!: THREE.MeshBasicMaterial;
   private screens: Screen[] = [];
   private primary: Screen;
   private secondary: Screen;
@@ -133,14 +178,35 @@ export class Cockpit {
     this.secondary = this.addScreen(panel, sideGeo, 320, 186, 0.5, -0.005);
     this.addBezel(panel, 0.42, 0.23, 0.03, -0.5, -0.005);
     this.addBezel(panel, 0.42, 0.23, 0.03, 0.5, -0.005);
-    // Centre pod: a rounded housing standing proud of the dash with a round display.
-    const pod = bezel(0.27, 0.23, 0.08, 0.04, this.metal);
+    // Centre pod: a rounded housing standing proud of the dash, holding a convex radar display
+    // under curved glass, inside a deep bezel ring.
+    const pod = bezel(0.3, 0.26, 0.09, 0.04, this.metal);
     pod.position.set(0, -0.005, 0.0);
     panel.add(pod);
-    this.status = this.addScreen(panel, new THREE.CircleGeometry(0.1, 48), 256, 256, 0, -0.005);
-    this.status.mesh.position.z = 0.058;
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.103, 0.005, 6, 48), this.accent);
-    ring.position.set(0, -0.005, 0.058);
+    const RAD = 0.112;
+    const DOME = 0.2; // sphere radius of the screen curve (smaller = more curved)
+    this.status = this.addScreen(panel, domeGeometry(RAD, DOME), 512, 512, 0, -0.005);
+    this.status.mesh.position.z = 0.056;
+    // Glass: slightly glossy, so it picks up the nebula/sun reflections as the ship turns, plus a fixed glare.
+    const glassGeo = domeGeometry(RAD, DOME, 0.003);
+    const glass = new THREE.Mesh(
+      glassGeo,
+      new THREE.MeshStandardMaterial({ color: 0x0a1418, metalness: 0.9, roughness: 0.12, transparent: true, opacity: 0.1, envMapIntensity: 2.5, depthWrite: false, fog: false }),
+    );
+    const glare = new THREE.Mesh(
+      glassGeo,
+      new THREE.MeshBasicMaterial({ map: glareTexture(), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
+    );
+    for (const m of [glass, glare]) {
+      m.position.set(0, -0.005, 0.056);
+      panel.add(m);
+    }
+    // Bezel: a thick ring around the screen with a thin lit inner lip.
+    const ringOuter = new THREE.Mesh(new THREE.TorusGeometry(RAD + 0.008, 0.011, 10, 64), this.metal);
+    ringOuter.position.set(0, -0.005, 0.058);
+    panel.add(ringOuter);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(RAD + 0.001, 0.0025, 6, 64), this.accent);
+    ring.position.set(0, -0.005, 0.062);
     panel.add(ring);
 
     // LOCK lamp, lower left; status lamps column, lower right.
@@ -198,7 +264,51 @@ export class Cockpit {
       this.frame.add(new THREE.Mesh(new THREE.TubeGeometry(rail, 16, 0.04, 6, false), this.metal));
     }
 
-    // ---- Muzzle flashes outside the canopy, where the bolts spawn (see Game.firePlayer).
+    // ---- Twin cannons on the nose, outside the canopy, ending where the bolts spawn
+    // (GUN_OFFSET, see Game.firePlayer). Barrels recoil on each shot and the coils glow with heat.
+    this.gunMetal = new THREE.MeshStandardMaterial({ color: 0x4a515c, metalness: 0.85, roughness: 0.3, emissive: 0x05070a, envMapIntensity: 1.8, fog: false });
+    this.coil = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.15, 0.9, 1.2), fog: false });
+    const tip = GUN_OFFSET.z;
+    const barrelLen = 0.42;
+    for (const sx of [-1, 1]) {
+      const gun = new THREE.Group();
+      gun.position.set(sx * GUN_OFFSET.x, GUN_OFFSET.y, 0);
+      g.add(gun);
+      // Mount: a tapered housing rising from below the dash line.
+      const mount = bezel(0.12, 0.09, 0.03, 0.26, this.gunMetal);
+      mount.position.set(0, -0.035, tip + barrelLen - 0.02);
+      gun.add(mount);
+      const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.2), this.dark);
+      pylon.position.set(0, -0.12, tip + barrelLen + 0.12);
+      gun.add(pylon);
+      // Thin status light along the housing.
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.2), this.coil);
+      strip.position.set(-sx * 0.05, -0.0, tip + barrelLen + 0.11);
+      gun.add(strip);
+      // Recoiling part: shroud, barrel, coils and muzzle brake.
+      const slide = new THREE.Group();
+      gun.add(slide);
+      const shroud = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.05, 0.2, 14), this.gunMetal);
+      shroud.rotation.x = Math.PI / 2;
+      shroud.position.z = tip + barrelLen - 0.08;
+      slide.add(shroud);
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.03, barrelLen, 12), this.gunMetal);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.z = tip + barrelLen / 2;
+      slide.add(barrel);
+      for (let i = 0; i < 3; i++) {
+        const c = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 6, 18), this.coil);
+        c.position.z = tip + 0.1 + i * 0.06;
+        slide.add(c);
+      }
+      const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.03, 0.05, 10), this.gunMetal);
+      brake.rotation.x = Math.PI / 2;
+      brake.position.z = tip + 0.025;
+      slide.add(brake);
+      this.slides.push(slide);
+    }
+
+    // ---- Muzzle flashes at the barrel tips.
     const muzzleGeo = new THREE.SphereGeometry(0.06, 8, 6);
     for (const sx of [-1, 1]) {
       const muzzle = new THREE.Mesh(
@@ -253,7 +363,9 @@ export class Cockpit {
   fired(side: number) {
     this.flash = 1;
     this.heat = Math.min(1, this.heat + 0.06);
-    const m = this.muzzles[side < 0 ? 0 : 1];
+    const i = side < 0 ? 0 : 1;
+    this.recoil[i] = 1;
+    const m = this.muzzles[i];
     (m.material as THREE.MeshBasicMaterial).opacity = 1;
   }
 
@@ -304,6 +416,17 @@ export class Cockpit {
       const mm = m.material as THREE.MeshBasicMaterial;
       mm.opacity = Math.max(0, mm.opacity - dt * 14);
     }
+    // Barrel recoil: snap back, ease forward.
+    for (let i = 0; i < 2; i++) {
+      this.recoil[i] = Math.max(0, this.recoil[i] - dt * 9);
+      const k = this.recoil[i];
+      this.slides[i].position.z = 0.05 * k * k;
+    }
+    // Coils: cool cyan, heating to orange; brief pulse on each shot.
+    const ht = this.heat;
+    const pulse = 1 + shotPulse(this.recoil);
+    this.coil.color.setRGB((0.15 + ht * 3.5) * pulse, (0.9 + ht * 0.4) * pulse * (1 - ht * 0.5), (1.2 - ht * 1.1) * pulse);
+    this.gunMetal.emissive.setRGB(0.02 + this.flash * 0.08 + ht * 0.06, 0.03 + this.flash * 0.18, 0.04 + this.flash * 0.22);
     const f = this.flash;
     this.metal.emissive.setRGB(0.024 + f * 0.05 + this.hurt * 0.25, 0.03 + f * 0.17, 0.045 + f * 0.2);
     this.dark.emissive.setRGB(0.015 + f * 0.03 + this.hurt * 0.15, 0.02 + f * 0.1, 0.028 + f * 0.12);
@@ -491,25 +614,40 @@ export class Cockpit {
   private drawStatus(game: Game, nav: NavInfo) {
     const s = this.status;
     const c = s.ctx;
-    const { width: w, height: h } = s.canvas;
+    // Drawn in a 256x256 logical space on a 512x512 canvas (crisp on the curved screen).
+    const scale = s.canvas.width / 256;
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    const w = 256;
+    const h = 256;
     const p = game.player;
     const cx = w / 2;
     const cy = h / 2;
     const R = w / 2 - 6;
     this.bg(c, w, h, '#020d14');
 
-    c.strokeStyle = 'rgba(127,232,255,0.22)';
-    c.lineWidth = 1.5;
-    for (const r of [R, R * 0.7]) {
+    c.strokeStyle = 'rgba(127,232,255,0.65)';
+    c.lineWidth = 2;
+    for (const r of [R * 0.92, R * 0.66]) {
       c.beginPath();
       c.arc(cx, cy, r, 0, Math.PI * 2);
       c.stroke();
     }
+    // Bearing ticks around the rim, longer every 45°.
+    for (let i = 0; i < 36; i++) {
+      const a = (i / 36) * Math.PI * 2;
+      const l = i % 9 === 0 ? 12 : i % 3 === 0 ? 7 : 4;
+      c.globalAlpha = i % 9 === 0 ? 0.8 : 0.45;
+      c.beginPath();
+      c.moveTo(cx + Math.cos(a) * R * 0.92, cy + Math.sin(a) * R * 0.92);
+      c.lineTo(cx + Math.cos(a) * (R * 0.92 - l), cy + Math.sin(a) * (R * 0.92 - l));
+      c.stroke();
+    }
+    c.globalAlpha = 1;
     const sweep = (this.time * 1.6) % (Math.PI * 2);
     const grd = c.createConicGradient?.(sweep, cx, cy);
     if (grd) {
-      grd.addColorStop(0, 'rgba(127,232,255,0.22)');
-      grd.addColorStop(0.1, 'rgba(127,232,255,0)');
+      grd.addColorStop(0, 'rgba(127,232,255,0.4)');
+      grd.addColorStop(0.12, 'rgba(127,232,255,0)');
       grd.addColorStop(1, 'rgba(127,232,255,0)');
       c.fillStyle = grd;
       c.beginPath();
@@ -577,6 +715,8 @@ export class Cockpit {
       c.stroke();
       c.globalAlpha = 1;
       c.fillStyle = color;
+      c.shadowColor = color;
+      c.shadowBlur = 8;
       if (diamond) {
         c.beginPath();
         c.moveTo(px, ey - size);
@@ -586,6 +726,7 @@ export class Cockpit {
         c.closePath();
         c.fill();
       } else c.fillRect(px - size / 2, ey - size / 2, size, size);
+      c.shadowBlur = 0;
     };
     for (const wp of nav.waypoints) plot(wp.pos, '#ffb02e', 7, true);
     for (const e of game.enemies) plot(e.mesh.position, e.hitFlash > 0.3 ? '#ffffff' : '#ff5a3c', 9, false);
@@ -596,6 +737,15 @@ export class Cockpit {
     c.fillStyle = col;
     c.fillText(`HULL ${Math.round(hull * 100)}%`, cx, cy + 56);
     c.textAlign = 'left';
+
+    // CRT face: darker, slightly cooler toward the curved edge, and a faint inner reflection ring.
+    const edge = c.createRadialGradient(cx, cy, R * 0.55, cx, cy, R + 6);
+    edge.addColorStop(0, 'rgba(0,0,0,0)');
+    edge.addColorStop(0.8, 'rgba(0,8,14,0.15)');
+    edge.addColorStop(1, 'rgba(0,4,8,0.6)');
+    c.fillStyle = edge;
+    c.fillRect(0, 0, w, h);
+    c.setTransform(1, 0, 0, 1, 0, 0);
     s.tex.needsUpdate = true;
   }
 
