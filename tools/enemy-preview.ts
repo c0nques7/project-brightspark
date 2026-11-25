@@ -5,10 +5,12 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { MODELS, type ModelKind } from '../src/enemies/models';
+import { MODELS } from '../src/enemies/models';
+import { SPACE_MODELS } from '../src/enemies/space-models';
+const ALL = { ...MODELS, ...SPACE_MODELS } as Record<string, () => import('../src/enemies/models').Model>;
 
 const q = new URLSearchParams(location.search);
-const kind = (q.get('kind') ?? 'warden') as ModelKind;
+const kind = q.get('kind') ?? 'warden';
 const yaw = Number(q.get('yaw') ?? 0.7);
 const pitch = Number(q.get('pitch') ?? 0.25);
 const mine = kind === 'tick' || kind === 'lantern' || kind === 'heartforge';
@@ -30,7 +32,7 @@ const rim = new THREE.DirectionalLight(mine ? 0x6688aa : 0x88aaff, 1.6);
 rim.position.set(-6, 2, -5);
 scene.add(key, rim, new THREE.HemisphereLight(0x8899bb, 0x221a14, 0.5));
 
-const m = MODELS[kind]();
+const m = ALL[kind]();
 scene.add(m.root);
 m.root.rotation.set(pitch, yaw, 0);
 if (kind === 'heartforge') {
@@ -40,7 +42,7 @@ if (kind === 'heartforge') {
 }
 if (kind === 'shade') m.body.opacity = 1;
 m.root.updateMatrixWorld(true);
-const beam = m.parts.beam;
+const beam = m.parts.beam ?? m.parts.bubble;
 const beamParent = beam?.parent;
 beam?.removeFromParent();
 
@@ -49,7 +51,7 @@ const size = box.getSize(new THREE.Vector3()).length();
 const center = box.getCenter(new THREE.Vector3());
 const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 500);
 if (beam) beamParent!.add(beam);
-const fit = kind === 'lantern' ? 1.15 : 1;
+const fit = kind === 'lantern' ? 1.15 : kind === 'aegis' ? 1.35 : kind === 'matriarch' ? 0.62 : kind in SPACE_MODELS ? 0.72 : 1;
 camera.position.copy(center).add(new THREE.Vector3(0, size * 0.12, size * 1.55 * fit));
 camera.lookAt(center);
 

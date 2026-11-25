@@ -13,15 +13,15 @@ export interface Model {
   parts: Record<string, THREE.Object3D>;
 }
 
-const hdr = (r: number, g: number, b: number) => new THREE.Color(r, g, b);
-const glow = (c: THREE.Color, extra: THREE.MeshBasicMaterialParameters = {}) =>
+export const hdr = (r: number, g: number, b: number) => new THREE.Color(r, g, b);
+export const glow = (c: THREE.Color, extra: THREE.MeshBasicMaterialParameters = {}) =>
   new THREE.MeshBasicMaterial({ color: c, ...extra });
-const additive = (c: THREE.Color, opacity = 1) =>
+export const additive = (c: THREE.Color, opacity = 1) =>
   new THREE.MeshBasicMaterial({ color: c, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity });
-const metal = (color: number, metalness = 0.6, roughness = 0.45) =>
+export const metal = (color: number, metalness = 0.6, roughness = 0.45) =>
   new THREE.MeshStandardMaterial({ color, metalness, roughness, flatShading: true });
 
-function mesh(g: THREE.BufferGeometry, m: THREE.Material, parent?: THREE.Object3D) {
+export function mesh(g: THREE.BufferGeometry, m: THREE.Material, parent?: THREE.Object3D) {
   const o = new THREE.Mesh(g, m);
   parent?.add(o);
   return o;
@@ -29,28 +29,30 @@ function mesh(g: THREE.BufferGeometry, m: THREE.Material, parent?: THREE.Object3
 
 // ---------- Weapon and tool parts shared by several models ----------
 /** Merge several transformed primitives into one geometry (one draw call per material). */
-function merged(...parts: THREE.BufferGeometry[]) {
+export function merged(...parts: THREE.BufferGeometry[]) {
+  // Mixing indexed (box, cone) and non-indexed (polyhedron) geometry: de-index everything.
+  if (parts.some((p) => !p.index)) parts = parts.map((p) => (p.index ? p.toNonIndexed() : p));
   const g = mergeGeometries(parts, false);
   if (!g) throw new Error('mergeGeometries failed: mismatched attributes');
   for (const p of parts) p.dispose();
   return g;
 }
 /** Cylinder along +z, from z0 to z0 + len. */
-function tube(r: number, len: number, z0 = 0, seg = 6, r2 = r) {
+export function tube(r: number, len: number, z0 = 0, seg = 6, r2 = r) {
   return new THREE.CylinderGeometry(r2, r, len, seg, 1).rotateX(Math.PI / 2).translate(0, 0, z0 + len / 2);
 }
-function box(w: number, h: number, d: number, x = 0, y = 0, z = 0) {
+export function box(w: number, h: number, d: number, x = 0, y = 0, z = 0) {
   return new THREE.BoxGeometry(w, h, d).translate(x, y, z);
 }
 /** A gun pod with a barrel: housing centred at the origin, barrel pointing down +z. Muzzle at z = podLen / 2 + barrelLen. */
-function cannon(podW: number, podLen: number, barrelR: number, barrelLen: number) {
+export function cannon(podW: number, podLen: number, barrelR: number, barrelLen: number) {
   return merged(box(podW, podW, podLen), tube(barrelR * 1.6, 0.25, podLen / 2 - 0.05), tube(barrelR, barrelLen, podLen / 2));
 }
-const gunMetal = metal(0x1c1e23, 0.8, 0.35);
-const muzzle = new THREE.OctahedronGeometry(0.16, 0);
+export const gunMetal = metal(0x1c1e23, 0.8, 0.35);
+export const muzzle = new THREE.OctahedronGeometry(0.16, 0);
 
 /** Add a mesh at a position (and optional euler) to a parent. */
-function place(g: THREE.BufferGeometry, m: THREE.Material, parent: THREE.Object3D, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) {
+export function place(g: THREE.BufferGeometry, m: THREE.Material, parent: THREE.Object3D, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) {
   const o = mesh(g, m, parent);
   o.position.set(x, y, z);
   o.rotation.set(rx, ry, rz);
