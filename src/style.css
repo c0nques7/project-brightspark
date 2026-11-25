@@ -411,3 +411,11 @@ body:has(#touch.touch) .stats {
   font-size: 13px;
   animation: blink 0.9s infinite alternate;
 }
+
+/* In cockpit view the dash screens show these, so keep the HUD to crosshair, markers and messages. */
+#hud.cockpit .bars,
+#hud.cockpit .stats,
+#hud.cockpit .speed,
+#hud.cockpit .zone-label {
+  display: none;
+}
