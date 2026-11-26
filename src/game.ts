@@ -14,6 +14,9 @@ const SECTOR_RADIUS = 14000;
 /** Fights only happen near the asteroid field; drones won't follow you down to the planet. */
 const LEASH_RADIUS = 900;
 
+/** Right gun muzzle in camera space (wingtip cannon); the left one mirrors x. */
+export const GUN_OFFSET = new THREE.Vector3(2.05, -0.44, -2.15);
+
 // ---------- Tuning ----------
 export const PLAYER = {
   radius: 1.4,
@@ -63,10 +66,12 @@ const geo = {
   wing: new THREE.BoxGeometry(3.6, 0.15, 1.1),
 };
 const mat = {
-  bolt: new THREE.MeshBasicMaterial({ color: 0x7ff6ff, blending: THREE.AdditiveBlending, transparent: true }),
-  enemyBolt: new THREE.MeshBasicMaterial({ color: 0xff5a3c, blending: THREE.AdditiveBlending, transparent: true }),
+  // HDR colours (>1) so bolts, eyes and thrusters bloom.
+  bolt: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.9, 3.2, 3.6), blending: THREE.AdditiveBlending, transparent: true }),
+  enemyBolt: new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 0.9, 0.45), blending: THREE.AdditiveBlending, transparent: true }),
+  thruster: new THREE.MeshBasicMaterial({ color: new THREE.Color(3.5, 1.2, 0.5), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }),
   ring: new THREE.MeshStandardMaterial({ color: 0x3b3f48, metalness: 0.7, roughness: 0.4 }),
-  eye: new THREE.MeshBasicMaterial({ color: 0xff3020 }),
+  eye: new THREE.MeshBasicMaterial({ color: new THREE.Color(5, 0.9, 0.5) }),
   wing: new THREE.MeshStandardMaterial({ color: 0x272a31, metalness: 0.6, roughness: 0.5 }),
 };
 
@@ -106,6 +111,10 @@ export interface GameEvents {
   message(text: string, sub?: string, seconds?: number): void;
   damaged(amount: number): void;
   gameOver(score: number, wave: number): void;
+  /** Optional presentation hooks (cockpit, effects). */
+  fired?(side: number): void;
+  exploded?(at: THREE.Vector3, scale: number): void;
+  impact?(at: THREE.Vector3): void;
 }
 
 const _a = new THREE.Vector3();
@@ -330,7 +339,7 @@ export class Game {
     const cam = this.camera;
     const p = this.player;
     p.gunSide *= -1;
-    const spawn = new THREE.Vector3(0.7 * p.gunSide, -0.45, -1.2).applyMatrix4(cam.matrixWorld);
+    const spawn = new THREE.Vector3(GUN_OFFSET.x * p.gunSide, GUN_OFFSET.y, GUN_OFFSET.z).applyMatrix4(cam.matrixWorld);
     const target = _a.set(0, 0, -PLAYER.convergence).applyMatrix4(cam.matrixWorld);
     const dir = target.sub(spawn).normalize().clone();
     const mesh = new THREE.Mesh(geo.bolt, mat.bolt);
@@ -345,7 +354,8 @@ export class Game {
       dmg: PLAYER.boltDamage,
       hostile: false,
     });
-    this.sfx.laser();
+    this.sfx.laser(p.gunSide);
+    this.events.fired?.(p.gunSide);
   }
 
   private fireEnemy(e: Enemy) {
@@ -370,7 +380,7 @@ export class Game {
       dmg: ENEMY.shotDamage + this.wave * 0.5,
       hostile: true,
     });
-    this.sfx.enemyShot();
+    this.sfx.enemyShot(from);
   }
 
   private updateEnemies(dt: number) {
@@ -427,12 +437,16 @@ export class Game {
 
       if (!dead && this.world.blocks(b.mesh.position)) {
         this.sparks(b.prev, b.hostile ? 0xff7a50 : 0x9ff8ff, 5);
+        this.events.impact?.(b.prev);
+        this.sfx.impact(b.prev);
         dead = true;
       }
       if (!dead) {
         for (const r of this.rocks) {
           if (segmentHitsSphere(b.prev, b.mesh.position, r.mesh.position, r.radius)) {
             this.sparks(b.mesh.position, b.hostile ? 0xff7a50 : 0x9ff8ff, 5);
+            this.events.impact?.(b.mesh.position);
+            this.sfx.impact(b.mesh.position);
             dead = true;
             break;
           }
@@ -513,7 +527,10 @@ export class Game {
     const eye = new THREE.Mesh(geo.eye, mat.eye);
     eye.position.z = 1.3;
     const wing = new THREE.Mesh(geo.wing, mat.wing);
-    g.add(body, ring, eye, wing);
+    const thruster = new THREE.Mesh(geo.spark, mat.thruster);
+    thruster.position.z = -1.5;
+    thruster.scale.set(0.45, 0.45, 0.9);
+    g.add(body, ring, eye, wing, thruster);
     g.scale.setScalar(1.25);
     g.position.copy(pos);
     this.scene.add(g);
@@ -533,7 +550,7 @@ export class Game {
     e.hp -= dmg;
     e.hitFlash = 1;
     this.sparks(at, 0x9ff8ff, 4);
-    this.sfx.hit();
+    this.sfx.hit(at);
     if (e.hp <= 0) {
       this.explode(e.mesh.position, 1);
       this.scene.remove(e.mesh);
@@ -552,7 +569,7 @@ export class Game {
     p.hull -= dmg - absorbed;
     this.shake = Math.min(1.5, this.shake + dmg / 12);
     this.events.damaged(dmg - absorbed > 0 ? 1 : 0.4);
-    this.sfx.hurt();
+    this.sfx.hurt(dmg - absorbed <= 0);
     if (p.hull <= 0) {
       p.hull = 0;
       this.explode(_a.set(0, 0, -6).applyMatrix4(this.camera.matrixWorld), 2.5);
@@ -568,6 +585,7 @@ export class Game {
       geo.spark,
       new THREE.MeshBasicMaterial({ color, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }),
     );
+    (m.material as THREE.MeshBasicMaterial).color.multiplyScalar(2.5); // HDR so it blooms
     m.position.copy(at);
     m.scale.setScalar(size);
     this.scene.add(m);
@@ -586,9 +604,10 @@ export class Game {
   }
 
   private explode(at: THREE.Vector3, scale: number) {
+    this.events.exploded?.(at, scale);
     this.spawnParticle(at, 0xfff1c0, 0, 2 * scale, 0.35, true);
     for (let i = 0; i < 26 * scale; i++) this.spawnParticle(at, i % 3 ? 0xff9a3c : 0xffe08a, 30 * scale, rand(0.3, 0.7) * scale, rand(0.5, 1.2));
-    if (scale < 2) this.sfx.explode(false);
+    if (scale < 2) this.sfx.explode(false, at);
   }
 
   private updateParticles(dt: number) {
