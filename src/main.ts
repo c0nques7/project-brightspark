@@ -207,7 +207,7 @@ function resize() {
   const h = window.innerHeight;
   camera.aspect = w / h;
   // Keep a usable horizontal view in portrait.
-  camera.fov = w < h ? settings.fov + 15 : settings.fov;
+  camera.fov = w < h ? Math.min(120, settings.fov + 15) : settings.fov;
   camera.updateProjectionMatrix();
   view.setSize(w, h);
   cockpit.fit();

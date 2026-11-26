@@ -204,7 +204,7 @@ export class Menu {
     this.segmented(body, 'Quality', q, () => settings.quality, (v) => (settings.quality = v));
     body.appendChild(h('div', 'menu-note', 'Auto lowers detail when the frame rate drops and raises it again when there is headroom.'));
     this.slider(body, 'Bloom', 0, 1.5, 0.05, () => settings.bloom, (v) => (settings.bloom = v), (v) => (v < 0.01 ? 'OFF' : `${Math.round(v * 100)}%`));
-    this.slider(body, 'Field of view', 60, 100, 1, () => settings.fov, (v) => (settings.fov = v), (v) => `${v}°`);
+    this.slider(body, 'Field of view', 60, 110, 1, () => settings.fov, (v) => (settings.fov = v), (v) => `${v}°`);
     this.toggle(body, 'Cockpit view', () => settings.cockpit, (v) => (settings.cockpit = v));
     this.toggle(body, 'Screen effects', () => settings.effects, (v) => (settings.effects = v), 'vignette, colour fringe, grain');
     const reset = h('div', 'menu-footer');
