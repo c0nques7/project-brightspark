@@ -92,6 +92,8 @@ export abstract class Enemy {
   maxHp: number;
   radius: number;
   hitFlash = 0;
+  /** Seconds of Aegis shielding left (refreshed every frame while an Aegis covers it). */
+  shielded = 0;
   /** 0 = fully visible; 1 = hidden from HUD markers, radar and touch auto-fire. */
   stealth = 0;
   /** Counts toward the current space wave. */
@@ -131,6 +133,7 @@ export abstract class Enemy {
   /** Per-frame update; subclasses put their behaviour in think(). */
   update(ctx: EnemyCtx, dt: number) {
     this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
+    this.shielded = Math.max(0, this.shielded - dt);
     const f = this.hitFlash;
     this.body.emissive.setRGB(this.baseEmissive.r + f, this.baseEmissive.g + f * 0.9, this.baseEmissive.b + f * 0.8);
     this.perceive(ctx, dt);
@@ -188,7 +191,12 @@ export abstract class Enemy {
    * Apply a hit from a bolt that travelled from `from` to `at`. Returns the damage actually done
    * (0 means it glanced off armour).
    */
-  takeHit(dmg: number, _from: THREE.Vector3, _at: THREE.Vector3, ctx: EnemyCtx): number {
+  takeHit(dmg: number, _from: THREE.Vector3, at: THREE.Vector3, ctx: EnemyCtx): number {
+    if (this.shielded > 0) {
+      // An Aegis is covering it: most of the hit soaks into the shield.
+      dmg *= 0.2;
+      ctx.sparks(at, 0x7fb6ff, 5);
+    }
     this.hp -= dmg;
     if (this.habitat === 'mine') this.alertTo(ctx, ctx.player.pos);
     return dmg;

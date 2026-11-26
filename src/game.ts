@@ -3,7 +3,7 @@ import type { Input } from './input';
 import type { Sfx } from './sfx';
 import { ARENA_RADIUS, rand, randomOnSphere, type Rock } from './world';
 import { Enemy, type BoltColor, type EnemyCtx, type FireOpts, type MineInfo } from './enemies/base';
-import { Warden } from './enemies/fighters';
+import { buildWave } from './enemies/waves';
 import { populateMine } from './enemies/spawn';
 
 export type { Enemy };
@@ -48,11 +48,6 @@ export const PLAYER = {
   convergence: 110,
   cruiseSpeed: 480,
   cruiseTurn: 0.45, // turn-rate multiplier while cruising
-};
-
-const WAVE = {
-  baseHp: 30,
-  hpPerWave: 6,
 };
 
 // ---------- Shared resources ----------
@@ -177,7 +172,7 @@ export class Game {
       sfx,
       get inMine() { return g.inMine; },
       get engaged() { return g.inCombatZone(); },
-      get aggression() { return 1 + Math.max(0, g.wave - 1) * 0.12; },
+      get aggression() { return Math.min(1.8, 1 + Math.max(0, g.wave - 1) * 0.1); },
       mineUp: this.mineUp,
       fire: (from, dir, o) => this.fireBolt(from, dir, o),
       hurtPlayer: (dmg) => this.damagePlayer(dmg),
@@ -514,23 +509,26 @@ export class Game {
 
   private spawnWave() {
     this.wave++;
-    const count = Math.min(2 + this.wave, 12);
-    const hp = WAVE.baseHp + WAVE.hpPerWave * (this.wave - 1);
-    const fwd = _a.copy(FORWARD).applyQuaternion(this.camera.quaternion);
-    for (let i = 0; i < count; i++) {
+    const fwd = _a.copy(FORWARD).applyQuaternion(this.camera.quaternion).clone();
+    const place = (min: number, max: number) => {
       const pos = new THREE.Vector3();
-      // Spawn mostly ahead of the player so the fight finds them.
+      // Spawn mostly ahead of the player so the fight finds them, clear of asteroids.
+      let guard = 0;
       do {
-        randomOnSphere(pos, rand(120, 190));
+        randomOnSphere(pos, rand(min, max));
         if (pos.dot(fwd) < 0 && Math.random() < 0.7) pos.negate();
         pos.add(this.camera.position);
-      } while (this.rocks.some((r) => r.mesh.position.distanceTo(pos) < r.radius + 8));
-      const e = new Warden(pos, 'space', hp);
-      e.wave = true;
-      e.score = 50 + this.wave * 10;
+      } while (guard++ < 30 && this.rocks.some((r) => r.mesh.position.distanceTo(pos) < r.radius + 12));
+      return pos;
+    };
+    const { enemies, intro } = buildWave(this.wave, place);
+    for (const e of enemies) {
+      if (e.kind === 'warden') e.score = 50 + this.wave * 10;
       this.addEnemy(e);
     }
-    if (this.wave > 1) this.events.message(`WAVE ${this.wave}`, `${count} hostiles inbound`, 2);
+    if (intro) this.events.message(intro[0], intro[1], 3);
+    else if (enemies.some((e) => e.kind === 'matriarch')) this.events.message(`WAVE ${this.wave}`, 'Carrier inbound', 2.5);
+    else if (this.wave > 1) this.events.message(`WAVE ${this.wave}`, `${enemies.length} hostiles inbound`, 2);
   }
 
   private damageEnemy(e: Enemy, dmg: number, from: THREE.Vector3, at: THREE.Vector3) {
