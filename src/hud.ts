@@ -40,6 +40,7 @@ export class Hud {
   private markers: { box: HTMLElement; hp: HTMLElement; arrow: HTMLElement; lead: HTMLElement }[] = [];
   private waypoints: { root: HTMLElement; label: HTMLElement }[] = [];
   private zone: HTMLElement;
+  private objective: HTMLElement;
   private msgTimer = 0;
   private hurt = 0;
 
@@ -62,6 +63,7 @@ export class Hud {
     this.stats = el('div', 'stats', root);
     this.speed = el('div', 'speed', root);
     this.zone = el('div', 'zone-label', root);
+    this.objective = el('div', 'objective', root);
     const m = el('div', 'message', root);
     this.msg = el('div', 'msg-main', m);
     this.msgSub = el('div', 'msg-sub', m);
@@ -74,6 +76,12 @@ export class Hud {
     this.msgSub.textContent = sub;
     this.msgTimer = seconds;
     this.msg.parentElement!.classList.add('show');
+  }
+
+  /** Persistent objective line under the zone label; `urgent` makes it a red countdown. */
+  setObjective(text: string, urgent = false) {
+    if (this.objective.textContent !== text) this.objective.textContent = text;
+    this.objective.classList.toggle('urgent', urgent);
   }
 
   damaged(intensity: number) {

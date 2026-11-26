@@ -33,8 +33,8 @@ In the browser console during `npm run dev`, `game` is the running `Game` instan
 
 1. **Fly and fight in space**: 6DOF flight, twin lasers, drone enemies in waves, shields/hull/boost, HUD with target and lead markers.
 2. **One mine level**, with a seamless trip from space to the planet surface and down into the mine.
-   - 2a (current): real planet with LOD terrain, atmosphere blend, cruise mode, nav markers, landing pad and shaft into generated tunnels.
-   - 2b: mines and turrets to clear, a reactor to destroy, then a timed escape back to space.
+   - 2a: real planet with LOD terrain, atmosphere blend, cruise mode, nav markers, landing pad and shaft into generated tunnels.
+   - 2b (current): wall turrets and proximity mines, a reactor chamber past the boss room, and a timed escape back to the surface once the reactor blows.
 3. **Sector and base loop**: sector map with planets; clearing a mine unlocks a base whose upgrades persist between runs.
 4. **Roguelike structure and polish**: random sectors, scaling difficulty, loot, saves, sound and menus.
 
@@ -48,5 +48,6 @@ In the browser console during `npm run dev`, `game` is the running `Game` instan
 - `src/environment.ts`: ties planet and mine into one world: collision routing, sky/fog/light blending by zone
 - `src/planet.ts`: cube-sphere quadtree terrain (LOD with skirts), height function, atmosphere rim, shaft hole
 - `src/mine.ts`: box-based mine generator (shaft, rooms, corridors), tiled walls, landing pad and beacon, tunnel collision
+- `src/hazards.ts`: static mine hazards (turrets, proximity mines), the reactor, hazard placement, and the destroy-and-escape objective
 - `src/noise.ts`: seeded 3D simplex noise
 - `src/sfx.ts`: synthesized sound effects (no audio files)
