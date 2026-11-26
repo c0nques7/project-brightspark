@@ -5,6 +5,7 @@ import { Environment } from './environment';
 import { Fx } from './fx';
 import { Renderer } from './render';
 import { Game, PLAYER } from './game';
+import { MineObjective } from './hazards';
 import { Hud, type Waypoint } from './hud';
 import { Input } from './input';
 import { Menu } from './menu';
@@ -76,6 +77,9 @@ const game = new Game(scene, camera, rocks, input, sfx, {
   fired: (side) => cockpit.fired(side),
   exploded: (at, scale) => fx.explosion(at, scale, camera),
   impact: (at) => fx.impact(at),
+  started: () => {
+    for (const e of objective.populate()) game.addEnemy(e);
+  },
   gameOver: (score, wave) => {
     setTimeout(() => {
       if (game.state !== 'over') return;
@@ -85,7 +89,20 @@ const game = new Game(scene, camera, rocks, input, sfx, {
   },
 }, env);
 
+// The mine's goal: destroy the reactor, then escape to the surface before the meltdown.
+const objective = new MineObjective(env.mine, {
+  message: (t, sub, sec) => hud.message(t, sub, sec),
+  setObjective: (t, urgent) => hud.setObjective(t, urgent),
+  alarm: () => sfx.alarm(),
+  explode: (at, scale) => game.explode(at, scale),
+  shake: (a) => game.addShake(a),
+  killPlayer: () => game.killPlayer(),
+  addScore: (n) => (game.score += n),
+  chime: () => sfx.chime(),
+});
+
 const mineWaypoint: Waypoint = { pos: env.mine.entrance, label: 'MINE' };
+const exitWaypoint: Waypoint = { pos: env.mine.entrance, label: 'EXIT' };
 const zoneWaypoint: Waypoint = { pos: new THREE.Vector3(0, 0, 0), label: 'COMBAT ZONE' };
 
 const controlsHelp = isTouch
@@ -231,7 +248,9 @@ function frame(now: number) {
   const p = game.player;
   const playing = game.state === 'playing';
   const wps: Waypoint[] = [];
-  if (env.zone !== 'mine') wps.push(mineWaypoint);
+  objective.update(dt, playing, env.zone === 'mine', env.altitude, camera.position);
+  if (env.zone !== 'mine' && objective.state !== 'escaped') wps.push(mineWaypoint);
+  if (env.zone === 'mine' && objective.state === 'meltdown') wps.push(exitWaypoint);
   if (!game.inCombatZone() && env.zone !== 'mine') wps.push(zoneWaypoint);
   const nav = { zone: env.zone, altitude: env.altitude, waypoints: wps };
   if (playing) hud.update(dt, game, nav);
@@ -263,4 +282,4 @@ function frame(now: number) {
 requestAnimationFrame(frame);
 
 // Handy for debugging in the browser console during development.
-if (import.meta.env.DEV) Object.assign(window, { game, env, THREE, renderer, view, cockpit, sfx });
+if (import.meta.env.DEV) Object.assign(window, { game, env, THREE, renderer, view, cockpit, sfx, objective });

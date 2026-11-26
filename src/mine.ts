@@ -18,6 +18,8 @@ export interface Room {
   center: THREE.Vector3;
   /** Steps from the hub room. */
   depth: number;
+  /** The reactor chamber: the mine's objective, reached past the deepest room. */
+  reactor?: boolean;
 }
 
 const _l = new THREE.Vector3();
@@ -66,6 +68,10 @@ export class Mine {
   private bounds = new THREE.Box3();
   private beacon: THREE.Mesh;
   private pylonLights: THREE.Mesh[] = [];
+  private lightsMat!: THREE.MeshBasicMaterial;
+  private beaconColor = new THREE.Color(1, 0.62, 0.25);
+  /** 0 = normal, >0 = meltdown alarm (lights strobe red). */
+  alarm = 0;
   readonly shaftHalf = 8;
   readonly shaftDepth = 160;
 
@@ -142,6 +148,54 @@ export class Mine {
       this.boxes.push(corridor, room);
       this.rooms.push({ box: room, center: rc, depth: from.depth + 1 });
     }
+    this.addReactorChamber(rnd);
+  }
+
+  /** Bolt a reactor chamber onto the deepest room, so the boss stands between the player and the objective. */
+  private addReactorChamber(rnd: () => number) {
+    const deepest = this.rooms.reduce((a, b) => (b.depth > a.depth || (b.depth === a.depth && b.center.lengthSq() > a.center.lengthSq()) ? b : a));
+    const dirs = [
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(0, -1, 0),
+    ].sort(() => rnd() - 0.5);
+    for (const room of [deepest, ...this.rooms.filter((r) => r !== deepest).sort((a, b) => b.depth - a.depth)]) {
+      const fb = room.box;
+      const half = new THREE.Vector3().subVectors(fb.max, fb.min).multiplyScalar(0.5);
+      for (const d of dirs) {
+        for (const len of [40, 56, 72, 32]) {
+          const axis = d.x !== 0 ? 'x' : d.y !== 0 ? 'y' : 'z';
+          const sign = d.x + d.y + d.z;
+          const start = room.center[axis] + sign * (half[axis] - TILE);
+          const end = start + sign * (len + TILE);
+          const c = room.center.clone();
+          c[axis] = (start + end) / 2;
+          const corridor = makeBox(c.x, c.y, c.z, axis === 'x' ? len / 2 + 2 : 8, axis === 'y' ? len / 2 + 2 : 8, axis === 'z' ? len / 2 + 2 : 8, 'corridor');
+          const rh = new THREE.Vector3(24, 16, 24);
+          const rc = room.center.clone();
+          rc[axis] = end - sign * TILE + sign * rh[axis];
+          if (axis !== 'y') rc.y = room.box.min.y + rh.y; // floor-level with the room it hangs off
+          const chamber = makeBox(rc.x, rc.y, rc.z, rh.x, rh.y, rh.z, 'room');
+          if (chamber.max.y > -40) continue;
+          if (axis !== 'y' && (corridor.min.y < chamber.min.y || corridor.max.y > chamber.max.y)) continue;
+          if (this.boxes.some((b) => b !== fb && (boxesOverlap(b, chamber, 8) || boxesOverlap(b, corridor, 4)))) continue;
+          this.boxes.push(corridor, chamber);
+          this.rooms.push({ box: chamber, center: rc, depth: room.depth + 1, reactor: true });
+          return;
+        }
+      }
+    }
+  }
+
+  get reactorRoom() {
+    return this.rooms.find((r) => r.reactor);
+  }
+
+  /** Is the local point inside any box (open space)? */
+  openAt(l: THREE.Vector3) {
+    return this.insideAny(l, 0);
   }
 
   // ---------- Geometry ----------
@@ -291,7 +345,8 @@ export class Mine {
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.Float32BufferAttribute(lpos, 3));
     lg.setAttribute('color', new THREE.Float32BufferAttribute(lcol, 3));
-    const lights = new THREE.Mesh(lg, new THREE.MeshBasicMaterial({ vertexColors: true }));
+    this.lightsMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    const lights = new THREE.Mesh(lg, this.lightsMat);
     lights.matrixAutoUpdate = false;
     this.group.add(lights);
   }
@@ -346,9 +401,9 @@ export class Mine {
     const beam = new THREE.Mesh(
       beamGeo,
       new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 } },
+        uniforms: { uTime: { value: 0 }, uColor: { value: this.beaconColor } },
         vertexShader: `varying float vY; void main(){ vY = position.y / 1400.0; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-        fragmentShader: `uniform float uTime; varying float vY; void main(){ float a = (1.0 - vY) * (0.35 + 0.1 * sin(uTime * 3.0)); gl_FragColor = vec4(1.0, 0.62, 0.25, a * a); }`,
+        fragmentShader: `uniform float uTime; uniform vec3 uColor; varying float vY; void main(){ float a = (1.0 - vY) * (0.35 + 0.1 * sin(uTime * 3.0)); gl_FragColor = vec4(uColor, a * a); }`,
         transparent: true,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
@@ -424,9 +479,20 @@ export class Mine {
     return n.lengthSq() > 0 ? n.normalize().transformDirection(this.frame) : null;
   }
 
+  /** Mine cleared: the beacon turns green. */
+  setCleared(cleared = true) {
+    if (cleared) this.beaconColor.setRGB(0.35, 1, 0.45);
+    else this.beaconColor.setRGB(1, 0.62, 0.25);
+  }
+
   update(time: number) {
     (this.beacon.material as THREE.ShaderMaterial).uniforms.uTime.value = time;
-    const on = Math.sin(time * 4) > 0;
+    const on = Math.sin(time * (this.alarm > 0 ? 10 : 4)) > 0;
     for (const l of this.pylonLights) l.visible = on;
+    // Meltdown: every light strip strobes red.
+    if (this.alarm > 0) {
+      const k = 0.5 + 0.5 * Math.sin(time * 9);
+      this.lightsMat.color.setRGB(1.6 + k, 0.15 + 0.2 * (1 - k), 0.1);
+    } else this.lightsMat.color.setRGB(1, 1, 1);
   }
 }

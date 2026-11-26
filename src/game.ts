@@ -105,6 +105,8 @@ export interface GameEvents {
   fired?(side: number): void;
   exploded?(at: THREE.Vector3, scale: number): void;
   impact?(at: THREE.Vector3): void;
+  /** A new run has started (after the mine's roaming enemies are placed). */
+  started?(): void;
 }
 
 const _a = new THREE.Vector3();
@@ -220,6 +222,7 @@ export class Game {
     this.state = 'playing';
     if (this.world.mine) for (const e of populateMine(this.world.mine)) this.addEnemy(e);
     this.events.message('SECTOR 1', 'Clear the hostiles', 2);
+    this.events.started?.();
   }
 
   // ---------- Main update ----------
@@ -404,7 +407,7 @@ export class Game {
     return n;
   }
 
-  private addEnemy(e: Enemy) {
+  addEnemy(e: Enemy) {
     this.scene.add(e.mesh);
     this.enemies.push(e);
   }
@@ -570,6 +573,18 @@ export class Game {
     }
   }
 
+  /** Destroy the ship outright (caught in the reactor meltdown). */
+  killPlayer() {
+    if (this.state !== 'playing') return;
+    this.player.shield = 0;
+    this.damagePlayer(this.player.hull + 1);
+  }
+
+  /** Add camera shake (0..1.5). */
+  addShake(amount: number) {
+    this.shake = Math.min(1.5, this.shake + amount);
+  }
+
   private damagePlayer(dmg: number) {
     const p = this.player;
     p.shieldTimer = PLAYER.shieldDelay;
@@ -612,7 +627,7 @@ export class Game {
     for (let i = 0; i < n; i++) this.spawnParticle(at, color, 18, 0.15, rand(0.15, 0.35));
   }
 
-  private explode(at: THREE.Vector3, scale: number) {
+  explode(at: THREE.Vector3, scale: number) {
     this.events.exploded?.(at, scale);
     this.spawnParticle(at, 0xfff1c0, 0, 2 * scale, 0.35, true);
     for (let i = 0; i < 26 * scale; i++) this.spawnParticle(at, i % 3 ? 0xff9a3c : 0xffe08a, 30 * scale, rand(0.3, 0.7) * scale, rand(0.5, 1.2));

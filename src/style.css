@@ -141,6 +141,26 @@ body:has(#touch.touch) .stats {
   opacity: 1;
 }
 
+.objective {
+  position: absolute;
+  left: 50%;
+  top: calc(max(14px, env(safe-area-inset-top)) + 18px);
+  transform: translateX(-50%);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: #ffcf7a;
+  white-space: nowrap;
+  text-shadow: 0 0 6px rgba(255, 176, 46, 0.6);
+}
+.objective.urgent {
+  top: calc(max(14px, env(safe-area-inset-top)) + 22px);
+  font-size: clamp(14px, 3.2vw, 22px);
+  font-weight: 700;
+  color: #ff5a3c;
+  text-shadow: 0 0 10px rgba(255, 60, 30, 0.8);
+  animation: blink 0.5s infinite alternate;
+}
+
 .zone-label {
   position: absolute;
   left: 50%;
