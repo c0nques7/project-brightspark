@@ -136,6 +136,53 @@ body:has(#touch.touch) .stats {
   opacity: 0.75;
 }
 
+.speed.cruise {
+  color: #ffd25f;
+  opacity: 1;
+}
+
+.zone-label {
+  position: absolute;
+  left: 50%;
+  top: max(14px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  opacity: 0.8;
+  white-space: pre;
+}
+
+.waypoint {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.wp-diamond {
+  position: absolute;
+  left: -7px;
+  top: -7px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ffb02e;
+  rotate: 45deg;
+  box-shadow: 0 0 6px rgba(255, 176, 46, 0.7);
+}
+.wp-label {
+  position: absolute;
+  left: 12px;
+  top: -6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: #ffcf7a;
+  white-space: nowrap;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+}
+
+.waypoint.flip .wp-label {
+  left: auto;
+  right: 12px;
+}
+
 .message {
   position: absolute;
   left: 0;
@@ -311,6 +358,13 @@ body:has(#touch.touch) .stats {
   height: 72px;
   left: calc(max(24px, env(safe-area-inset-left)) + 150px);
   bottom: max(120px, calc(env(safe-area-inset-bottom) + 120px));
+}
+.tbtn.cruise {
+  width: 64px;
+  height: 64px;
+  right: calc(max(24px, env(safe-area-inset-right)) + 150px);
+  bottom: max(120px, calc(env(safe-area-inset-bottom) + 120px));
+  font-size: 9px;
 }
 .tbtn.pause {
   width: 40px;

@@ -27,6 +27,7 @@ export class Input {
   private tMoveX = 0;
   private tMoveZ = 0;
   private tBoost = false;
+  private cruiseToggle = false;
 
   constructor(private el: HTMLElement, touchRoot: HTMLElement) {
     this.touch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -35,6 +36,7 @@ export class Input {
       this.keys.add(e.code);
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
       if (e.code === 'KeyP') this.onPause?.();
+      if (e.code === 'KeyX' && !e.repeat) this.cruiseToggle = true;
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => {
@@ -76,6 +78,13 @@ export class Input {
     const r: [number, number] = [this.lookX, this.lookY];
     this.lookX = this.lookY = 0;
     return r;
+  }
+
+  /** True once per press of the cruise key / button. */
+  consumeCruiseToggle() {
+    const t = this.cruiseToggle;
+    this.cruiseToggle = false;
+    return t;
   }
 
   poll() {
@@ -199,6 +208,7 @@ export class Input {
       () => (this.tBoost = true),
       () => (this.tBoost = false),
     );
+    button('cruise', 'CRUISE', () => (this.cruiseToggle = true));
     button('pause', 'II', () => this.onPause?.());
   }
 }

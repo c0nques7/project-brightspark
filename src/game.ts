@@ -3,6 +3,17 @@ import type { Input } from './input';
 import type { Sfx } from './sfx';
 import { ARENA_RADIUS, rand, randomOnSphere, type Rock } from './world';
 
+/** The parts of the world beyond the asteroid field that the game needs to ask about. */
+export interface WorldQuery {
+  collide(pos: THREE.Vector3, radius: number): THREE.Vector3 | null;
+  blocks(pos: THREE.Vector3): boolean;
+  cruiseBlocked(pos: THREE.Vector3): string | null;
+}
+
+const SECTOR_RADIUS = 14000;
+/** Fights only happen near the asteroid field; drones won't follow you down to the planet. */
+const LEASH_RADIUS = 900;
+
 // ---------- Tuning ----------
 export const PLAYER = {
   radius: 1.4,
@@ -25,6 +36,8 @@ export const PLAYER = {
   boltDamage: 10,
   boltLife: 1.1,
   convergence: 110,
+  cruiseSpeed: 480,
+  cruiseTurn: 0.45, // turn-rate multiplier while cruising
 };
 
 const ENEMY = {
@@ -100,6 +113,7 @@ const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();
 const FORWARD = new THREE.Vector3(0, 0, -1);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const ORIGIN = new THREE.Vector3();
 
 /** Does segment a->b pass within r of point c? */
 function segmentHitsSphere(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, r: number) {
@@ -127,6 +141,8 @@ export class Game {
     gunSide: 1,
     boosting: false,
     outOfBounds: false,
+    cruising: false,
+    cruiseNote: '' as string,
   };
 
   enemies: Enemy[] = [];
@@ -143,6 +159,7 @@ export class Game {
     private input: Input,
     private sfx: Sfx,
     private events: GameEvents,
+    private world: WorldQuery,
   ) {}
 
   // ---------- Lifecycle ----------
@@ -159,6 +176,7 @@ export class Game {
       energy: PLAYER.energy,
       shieldTimer: 0,
       fireTimer: 0,
+      cruising: false,
     });
     this.player.vel.set(0, 0, 0);
     this.camera.position.set(0, 0, 0);
@@ -208,8 +226,9 @@ export class Game {
 
     // Rotation (local axes, so it's true 6DOF: no "up" in space).
     const [lx, ly] = inp.consumeLook();
-    cam.rotateY(-lx * PLAYER.mouseSens - inp.turnX * PLAYER.stickYaw * dt);
-    cam.rotateX(-ly * PLAYER.mouseSens - inp.turnY * PLAYER.stickPitch * dt);
+    const turn = p.cruising ? PLAYER.cruiseTurn : 1;
+    cam.rotateY((-lx * PLAYER.mouseSens - inp.turnX * PLAYER.stickYaw * dt) * turn);
+    cam.rotateX((-ly * PLAYER.mouseSens - inp.turnY * PLAYER.stickPitch * dt) * turn);
     cam.rotateZ(inp.roll * PLAYER.rollRate * dt);
 
     // Boost uses energy.
@@ -218,17 +237,39 @@ export class Game {
       ? Math.max(0, p.energy - PLAYER.boostDrain * dt)
       : Math.min(PLAYER.energy, p.energy + PLAYER.energyRegen * dt);
 
-    // Thrust in ship space.
-    _a.set(inp.moveX, inp.moveY, -inp.moveZ);
-    if (_a.lengthSq() > 1) _a.normalize();
-    _a.applyQuaternion(cam.quaternion).multiplyScalar(p.boosting ? PLAYER.boostAccel : PLAYER.accel);
-    p.vel.addScaledVector(_a, dt);
-    p.vel.multiplyScalar(Math.exp(-PLAYER.damping * dt));
+    // Cruise: a fast travel mode for crossing the sector. Drops out near enemies or the ground.
+    const blocked = this.cruiseBlockedReason();
+    if (inp.consumeCruiseToggle()) {
+      if (p.cruising) p.cruising = false;
+      else if (blocked) this.events.message('CRUISE UNAVAILABLE', blocked, 1.5);
+      else p.cruising = true;
+    }
+    if (p.cruising && (blocked || inp.moveZ < 0)) {
+      p.cruising = false;
+      if (blocked) this.events.message('CRUISE DISENGAGED', blocked, 1.5);
+    }
+    p.cruiseNote = blocked ?? '';
 
-    // Soft arena boundary.
+    if (p.cruising) {
+      p.boosting = false;
+      _a.copy(FORWARD).applyQuaternion(cam.quaternion).multiplyScalar(PLAYER.cruiseSpeed);
+      p.vel.lerp(_a, 1 - Math.exp(-1.2 * dt));
+    } else {
+      // Thrust in ship space.
+      _a.set(inp.moveX, inp.moveY, -inp.moveZ);
+      if (_a.lengthSq() > 1) _a.normalize();
+      _a.applyQuaternion(cam.quaternion).multiplyScalar(p.boosting ? PLAYER.boostAccel : PLAYER.accel);
+      p.vel.addScaledVector(_a, dt);
+      // Flight assist brakes harder after dropping out of cruise, so you don't overshoot.
+      const speed = p.vel.length();
+      const extra = speed > 120 ? 1.5 : 0;
+      p.vel.multiplyScalar(Math.exp(-(PLAYER.damping + extra) * dt));
+    }
+
+    // Soft sector boundary.
     const d = cam.position.length();
-    p.outOfBounds = d > ARENA_RADIUS;
-    if (p.outOfBounds) p.vel.addScaledVector(_b.copy(cam.position).normalize(), -(d - ARENA_RADIUS) * 2 * dt);
+    p.outOfBounds = d > SECTOR_RADIUS;
+    if (p.outOfBounds) p.vel.addScaledVector(_b.copy(cam.position).normalize(), -(d - SECTOR_RADIUS) * 2 * dt);
 
     cam.position.addScaledVector(p.vel, dt);
 
@@ -245,6 +286,17 @@ export class Game {
           p.vel.addScaledVector(_b, -into * 1.4);
           if (-into > 18) this.damagePlayer((-into - 18) * 0.9);
         }
+      }
+    }
+
+    // Ground and tunnel walls.
+    const n = this.world.collide(cam.position, PLAYER.radius);
+    if (n) {
+      const into = p.vel.dot(n);
+      if (into < 0) {
+        p.vel.addScaledVector(n, -into * 1.3);
+        if (-into > 18) this.damagePlayer((-into - 18) * 0.9);
+        if (p.cruising) p.cruising = false;
       }
     }
 
@@ -322,7 +374,8 @@ export class Game {
   }
 
   private updateEnemies(dt: number) {
-    const ppos = this.camera.position;
+    const engaged = this.inCombatZone();
+    const ppos = engaged ? this.camera.position : ORIGIN;
     const aggression = 1 + (this.wave - 1) * 0.12;
     for (const e of this.enemies) {
       const pos = e.mesh.position;
@@ -356,7 +409,7 @@ export class Game {
       e.bodyMat.emissive.setRGB(0.12 + e.hitFlash, 0.03 + e.hitFlash * 0.9, 0.02 + e.hitFlash * 0.7);
 
       e.cooldown -= dt;
-      if (e.cooldown <= 0 && dist < ENEMY.range) {
+      if (e.cooldown <= 0 && engaged && dist < ENEMY.range) {
         e.cooldown = rand(1.1, 2.3) / aggression;
         this.fireEnemy(e);
       }
@@ -372,6 +425,10 @@ export class Game {
       b.life -= dt;
       let dead = b.life <= 0;
 
+      if (!dead && this.world.blocks(b.mesh.position)) {
+        this.sparks(b.prev, b.hostile ? 0xff7a50 : 0x9ff8ff, 5);
+        dead = true;
+      }
       if (!dead) {
         for (const r of this.rocks) {
           if (segmentHitsSphere(b.prev, b.mesh.position, r.mesh.position, r.radius)) {
@@ -402,8 +459,19 @@ export class Game {
     }
   }
 
+  /** Is the player close enough to the asteroid field for the fight to follow them? */
+  inCombatZone() {
+    return this.camera.position.length() < LEASH_RADIUS;
+  }
+
+  private cruiseBlockedReason(): string | null {
+    for (const e of this.enemies) if (e.mesh.position.distanceTo(this.camera.position) < 300) return 'HOSTILES NEARBY';
+    return this.world.cruiseBlocked(this.camera.position);
+  }
+
   private updateWaves(dt: number) {
     if (this.enemies.length > 0) return;
+    if (!this.inCombatZone()) return;
     if (this.waveTimer > 0) {
       this.waveTimer -= dt;
       if (this.waveTimer <= 0) this.spawnWave();

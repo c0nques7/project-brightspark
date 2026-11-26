@@ -6,6 +6,7 @@ export interface Rock {
   spin: THREE.Vector3;
 }
 
+/** Radius of the asteroid field where the space fights happen, centred on the origin. */
 export const ARENA_RADIUS = 420;
 
 function rand(a: number, b: number) {
@@ -37,6 +38,8 @@ function glowTexture(inner: string, outer: string) {
 /** Background objects that stay at "infinite" distance by following the camera. */
 export class Sky {
   readonly group = new THREE.Group();
+  private starMat: THREE.PointsMaterial;
+  private sun: THREE.Sprite;
 
   constructor(scene: THREE.Scene, sunDir: THREE.Vector3) {
     // Stars
@@ -46,52 +49,37 @@ export class Sky {
     const v = new THREE.Vector3();
     const c = new THREE.Color();
     for (let i = 0; i < n; i++) {
-      randomOnSphere(v, 1800).toArray(pos, i * 3);
+      randomOnSphere(v, 20000).toArray(pos, i * 3);
       c.setHSL(rand(0.55, 0.68), rand(0, 0.5), rand(0.55, 1)).toArray(col, i * 3);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    const stars = new THREE.Points(
-      g,
-      new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, fog: false, depthWrite: false }),
-    );
+    this.starMat = new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, fog: false, depthWrite: false, transparent: true });
+    const stars = new THREE.Points(g, this.starMat);
     this.group.add(stars);
 
     // Sun glow
-    const sun = new THREE.Sprite(
+    const sun = (this.sun = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: glowTexture('rgba(255,250,235,1)', 'rgba(255,190,110,0.5)'),
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         fog: false,
       }),
-    );
-    sun.position.copy(sunDir).multiplyScalar(1500);
-    sun.scale.setScalar(420);
+    ));
+    sun.position.copy(sunDir).multiplyScalar(18000);
+    sun.scale.setScalar(5000);
     this.group.add(sun);
-
-    // A distant planet: a hint of where the mine levels will be.
-    const planet = new THREE.Mesh(
-      new THREE.SphereGeometry(320, 48, 32),
-      new THREE.MeshStandardMaterial({ color: 0x3a6f8f, roughness: 1, metalness: 0, fog: false }),
-    );
-    planet.position.set(-700, -180, -1200);
-    this.group.add(planet);
-    const atmo = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: glowTexture('rgba(120,200,255,0)', 'rgba(90,170,255,0.25)'),
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        fog: false,
-      }),
-    );
-    atmo.position.copy(planet.position);
-    atmo.scale.setScalar(980);
-    this.group.add(atmo);
 
     this.group.renderOrder = -1;
     scene.add(this.group);
+  }
+
+  /** Fade stars out in daylight and everything out underground. */
+  setDaylight(atmo: number, under: number) {
+    this.starMat.opacity = Math.max(0, 1 - atmo * 1.6) * (1 - under);
+    this.sun.material.opacity = 1 - under;
   }
 
   follow(cam: THREE.Camera) {
