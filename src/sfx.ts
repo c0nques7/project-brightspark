@@ -428,6 +428,51 @@ export class Sfx {
     for (let i = 0; i < (big ? 8 : 4); i++) this.burst(0.06, 0.12, 2500 + Math.random() * 3000, 800, d, 'bandpass', 2, 0.15 + Math.random() * 0.6 * s);
   }
 
+  // ---------- Enemy cues ----------
+  /** A shot glancing off armour. */
+  deflect(pos?: THREE.Vector3) {
+    const d = this.out(pos);
+    this.tone('square', 2200, 900, 0.09, 0.04, d);
+    this.tone('sine', 4200, 3600, 0.15, 0.025, d);
+  }
+  /** Lantern spotted the player: two-tone siren. */
+  alarm(pos?: THREE.Vector3) {
+    const d = this.out(pos, 900);
+    for (let i = 0; i < 3; i++) {
+      this.tone('sawtooth', 880, 880, 0.16, 0.05, d, i * 0.34, 0.01);
+      this.tone('sawtooth', 660, 660, 0.16, 0.05, d, i * 0.34 + 0.17, 0.01);
+    }
+  }
+  /** Ember lock-on beep; pitch rises with urgency 0..1. */
+  lockOn(pos: THREE.Vector3 | undefined, urgency: number) {
+    const f = 900 + urgency * 900;
+    this.tone('square', f, f, 0.06, 0.035, this.out(pos));
+  }
+  /** Shade phasing in or out. */
+  cloak(pos: THREE.Vector3 | undefined, on: boolean) {
+    const d = this.out(pos);
+    if (on) this.tone('sine', 900, 140, 0.5, 0.05, d, 0, 0.05);
+    else this.tone('sine', 160, 1100, 0.45, 0.05, d, 0, 0.05);
+    this.burst(0.4, 0.05, on ? 4000 : 600, on ? 500 : 5000, d, 'bandpass', 3);
+  }
+  /** Shade rail lance charging up. */
+  charge(pos?: THREE.Vector3) {
+    this.tone('sawtooth', 200, 1800, 0.55, 0.04, this.out(pos), 0, 0.3);
+  }
+  /** Tick bite / drill grind. */
+  bite(pos?: THREE.Vector3) {
+    const d = this.out(pos);
+    this.burst(0.12, 0.12, 3000, 800, d, 'bandpass', 4);
+    this.tone('square', 140, 90, 0.1, 0.05, d);
+  }
+  /** Big low roar for the boss waking or changing phase. */
+  roar(pos?: THREE.Vector3) {
+    const d = this.out(pos, 2000);
+    this.tone('sawtooth', 70, 38, 1.6, 0.12, d, 0, 0.15);
+    this.tone('square', 105, 52, 1.4, 0.05, d, 0.05, 0.2);
+    this.burst(1.5, 0.12, 400, 60, d);
+  }
+
   chime() {
     const d = this.out();
     [523.3, 659.3, 784, 1046.5].forEach((f, i) => this.tone('sine', f, f, 0.35, 0.07, d, i * 0.08, 0.01));

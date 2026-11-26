@@ -90,7 +90,7 @@ export class Hud {
     this.hullBar.style.width = `${(p.hull / PLAYER.hull) * 100}%`;
     this.hullBar.classList.toggle('low', p.hull < 30);
     this.energyBar.style.width = `${(p.energy / PLAYER.energy) * 100}%`;
-    this.stats.textContent = `WAVE ${game.wave}   HOSTILES ${game.enemies.length}   SCORE ${game.score}`;
+    this.stats.textContent = `WAVE ${game.wave}   HOSTILES ${game.hostiles}   SCORE ${game.score}`;
     const mode = p.cruising ? '  CRUISE' : p.boosting ? '  BOOST' : '';
     this.speed.textContent = `${Math.round(p.vel.length())} m/s${mode}`;
     this.speed.classList.toggle('cruise', p.cruising);
@@ -153,7 +153,7 @@ export class Hud {
     const cam = game.camera;
     const w = window.innerWidth;
     const h = window.innerHeight;
-    while (this.markers.length < game.enemies.length) {
+    while (this.markers.length < game.tracked.length) {
       const box = el('div', 'marker', this.markerLayer);
       const hp = el('div', 'marker-hp', box);
       const arrow = el('div', 'edge-arrow', this.markerLayer);
@@ -163,7 +163,7 @@ export class Hud {
     cam.updateMatrixWorld();
     for (let i = 0; i < this.markers.length; i++) {
       const m = this.markers[i];
-      const e = game.enemies[i];
+      const e = game.tracked[i];
       if (!e) {
         m.box.style.display = m.arrow.style.display = m.lead.style.display = 'none';
         continue;

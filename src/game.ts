@@ -2,12 +2,19 @@ import * as THREE from 'three';
 import type { Input } from './input';
 import type { Sfx } from './sfx';
 import { ARENA_RADIUS, rand, randomOnSphere, type Rock } from './world';
+import { Enemy, type BoltColor, type EnemyCtx, type FireOpts, type MineInfo } from './enemies/base';
+import { buildWave } from './enemies/waves';
+import { populateMine } from './enemies/spawn';
+
+export type { Enemy };
 
 /** The parts of the world beyond the asteroid field that the game needs to ask about. */
 export interface WorldQuery {
   collide(pos: THREE.Vector3, radius: number): THREE.Vector3 | null;
   blocks(pos: THREE.Vector3): boolean;
   cruiseBlocked(pos: THREE.Vector3): string | null;
+  /** The mine, if this world has one; its enemies are spawned from its rooms. */
+  mine?: MineInfo;
 }
 
 const SECTOR_RADIUS = 14000;
@@ -43,36 +50,24 @@ export const PLAYER = {
   cruiseTurn: 0.45, // turn-rate multiplier while cruising
 };
 
-const ENEMY = {
-  radius: 3,
-  baseHp: 30,
-  hpPerWave: 6,
-  accel: 30,
-  damping: 0.9,
-  preferredRange: 55,
-  shotSpeed: 95,
-  shotDamage: 8,
-  range: 170,
-};
-
 // ---------- Shared resources ----------
 const geo = {
   bolt: new THREE.BoxGeometry(0.14, 0.14, 3.2),
   enemyBolt: new THREE.IcosahedronGeometry(0.55, 0),
   spark: new THREE.IcosahedronGeometry(1, 0),
-  body: new THREE.IcosahedronGeometry(1.6, 0),
-  ring: new THREE.TorusGeometry(2.1, 0.22, 6, 16),
-  eye: new THREE.SphereGeometry(0.55, 12, 8),
-  wing: new THREE.BoxGeometry(3.6, 0.15, 1.1),
 };
 const mat = {
   // HDR colours (>1) so bolts, eyes and thrusters bloom.
   bolt: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.9, 3.2, 3.6), blending: THREE.AdditiveBlending, transparent: true }),
-  enemyBolt: new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 0.9, 0.45), blending: THREE.AdditiveBlending, transparent: true }),
-  thruster: new THREE.MeshBasicMaterial({ color: new THREE.Color(3.5, 1.2, 0.5), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }),
-  ring: new THREE.MeshStandardMaterial({ color: 0x3b3f48, metalness: 0.7, roughness: 0.4 }),
-  eye: new THREE.MeshBasicMaterial({ color: new THREE.Color(5, 0.9, 0.5) }),
-  wing: new THREE.MeshStandardMaterial({ color: 0x272a31, metalness: 0.6, roughness: 0.5 }),
+};
+const boltMat = (r: number, g: number, b: number) =>
+  new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b), blending: THREE.AdditiveBlending, transparent: true });
+const enemyBoltMat: Record<BoltColor, THREE.MeshBasicMaterial> = {
+  red: boltMat(4, 0.9, 0.45),
+  amber: boltMat(4, 2.6, 0.4),
+  orange: boltMat(5, 1.6, 0.25),
+  violet: boltMat(2.6, 0.8, 5),
+  white: boltMat(4, 3.8, 3),
 };
 
 // ---------- Types ----------
@@ -85,16 +80,6 @@ interface Bolt {
   hostile: boolean;
 }
 
-export interface Enemy {
-  mesh: THREE.Group;
-  bodyMat: THREE.MeshStandardMaterial;
-  vel: THREE.Vector3;
-  hp: number;
-  maxHp: number;
-  cooldown: number;
-  orbitAxis: THREE.Vector3;
-  hitFlash: number;
-}
 
 interface Particle {
   mesh: THREE.Mesh;
@@ -155,6 +140,11 @@ export class Game {
   };
 
   enemies: Enemy[] = [];
+  /** Enemies the HUD, radar and touch auto-fire should know about (not cloaked, not asleep in the mine). */
+  tracked: Enemy[] = [];
+  private ctx: EnemyCtx;
+  private mineUp = new THREE.Vector3(0, 1, 0);
+  private inMine = false;
   private bolts: Bolt[] = [];
   private particles: Particle[] = [];
   private waveTimer = 0;
@@ -169,14 +159,42 @@ export class Game {
     private sfx: Sfx,
     private events: GameEvents,
     private world: WorldQuery,
-  ) {}
+  ) {
+    if (world.mine) this.mineUp.set(0, 1, 0).transformDirection(world.mine.frame);
+    // The view of the game that enemies get each frame.
+    const g = this;
+    this.ctx = {
+      get time() { return g.time; },
+      player: { pos: camera.position, vel: this.player.vel, radius: PLAYER.radius },
+      get enemies() { return g.enemies; },
+      rocks,
+      world,
+      sfx,
+      get inMine() { return g.inMine; },
+      get engaged() { return g.inCombatZone(); },
+      get aggression() { return Math.min(1.8, 1 + Math.max(0, g.wave - 1) * 0.1); },
+      mineUp: this.mineUp,
+      fire: (from, dir, o) => this.fireBolt(from, dir, o),
+      hurtPlayer: (dmg) => this.damagePlayer(dmg),
+      blast: (at, r, dmg, src) => this.blast(at, r, dmg, src),
+      explode: (at, scale) => this.explode(at, scale),
+      sparks: (at, c, n) => this.sparks(at, c, n),
+      spawn: (e) => this.addEnemy(e),
+      alert: (at, r) => {
+        for (const e of this.enemies) if (e.habitat === 'mine' && e.pos.distanceTo(at) < r) e.alertTo(this.ctx, this.camera.position);
+      },
+      message: (t, sub, sec) => this.events.message(t, sub, sec),
+      canSee: (a, b) => this.lineOfSight(a, b),
+    };
+  }
 
   // ---------- Lifecycle ----------
   start() {
-    for (const e of this.enemies) this.scene.remove(e.mesh);
+    for (const e of this.enemies) e.dispose();
     for (const b of this.bolts) this.scene.remove(b.mesh);
     for (const p of this.particles) this.scene.remove(p.mesh);
     this.enemies = [];
+    this.tracked = [];
     this.bolts = [];
     this.particles = [];
     Object.assign(this.player, {
@@ -195,6 +213,7 @@ export class Game {
     this.kills = 0;
     this.waveTimer = 1.2;
     this.state = 'playing';
+    if (this.world.mine) for (const e of populateMine(this.world.mine)) this.addEnemy(e);
     this.events.message('SECTOR 1', 'Clear the hostiles', 2);
   }
 
@@ -325,12 +344,12 @@ export class Game {
   /** True if some enemy is close to the line of fire. */
   enemyUnderCrosshair() {
     _a.copy(FORWARD).applyQuaternion(this.camera.quaternion);
-    for (const e of this.enemies) {
+    for (const e of this.tracked) {
       _b.subVectors(e.mesh.position, this.camera.position);
       const dist = _b.length();
       if (dist > 260) continue;
       const ang = _a.angleTo(_b);
-      if (ang < Math.atan2(ENEMY.radius * 1.6, dist) + 0.02) return true;
+      if (ang < Math.atan2(e.radius * 1.4, dist) + 0.02) return true;
     }
     return false;
   }
@@ -358,72 +377,59 @@ export class Game {
     this.events.fired?.(p.gunSide);
   }
 
-  private fireEnemy(e: Enemy) {
-    const from = e.mesh.position;
-    const to = this.camera.position;
-    const dist = from.distanceTo(to);
-    // Lead the target (imperfectly, so dodging works).
-    const t = dist / ENEMY.shotSpeed;
-    const aim = _a.copy(to).addScaledVector(this.player.vel, t * rand(0.4, 0.9));
-    aim.x += rand(-2, 2);
-    aim.y += rand(-2, 2);
-    aim.z += rand(-2, 2);
-    const dir = aim.sub(from).normalize().clone();
-    const mesh = new THREE.Mesh(geo.enemyBolt, mat.enemyBolt);
-    mesh.position.copy(from).addScaledVector(dir, ENEMY.radius + 0.5);
+  private fireBolt(from: THREE.Vector3, dir: THREE.Vector3, o: FireOpts) {
+    const mesh = new THREE.Mesh(geo.enemyBolt, enemyBoltMat[o.color ?? 'red']);
+    mesh.position.copy(from);
+    if (o.size) mesh.scale.setScalar(o.size);
     this.scene.add(mesh);
     this.bolts.push({
       mesh,
-      vel: dir.multiplyScalar(ENEMY.shotSpeed),
-      prev: mesh.position.clone(),
-      life: 3.5,
-      dmg: ENEMY.shotDamage + this.wave * 0.5,
+      vel: dir.clone().multiplyScalar(o.speed),
+      prev: from.clone(),
+      life: o.life ?? 3.5,
+      dmg: o.dmg,
       hostile: true,
     });
-    this.sfx.enemyShot(from);
+  }
+
+  /** Hostiles left in the current area: the mine's population while down there, else the space wave. */
+  get hostiles() {
+    let n = 0;
+    for (const e of this.enemies) if (this.inMine ? e.habitat === 'mine' : e.wave) n++;
+    return n;
+  }
+
+  private addEnemy(e: Enemy) {
+    this.scene.add(e.mesh);
+    this.enemies.push(e);
+  }
+
+  /** Sample the segment for rock (tunnel walls, terrain). */
+  lineOfSight(a: THREE.Vector3, b: THREE.Vector3) {
+    const d = a.distanceTo(b);
+    const steps = Math.ceil(d / 2.5);
+    for (let i = 1; i < steps; i++) if (this.world.blocks(_c.lerpVectors(a, b, i / steps))) return false;
+    return true;
   }
 
   private updateEnemies(dt: number) {
-    const engaged = this.inCombatZone();
-    const ppos = engaged ? this.camera.position : ORIGIN;
-    const aggression = 1 + (this.wave - 1) * 0.12;
-    for (const e of this.enemies) {
-      const pos = e.mesh.position;
-      _a.subVectors(ppos, pos);
-      const dist = _a.length();
-      _a.divideScalar(dist || 1);
-
-      // Steering: hold preferred range, orbit around the player, avoid each other and rocks.
-      const steer = _b.copy(_a).multiplyScalar(THREE.MathUtils.clamp((dist - ENEMY.preferredRange) / 30, -1, 1));
-      _c.crossVectors(_a, e.orbitAxis).normalize().multiplyScalar(0.8);
-      steer.add(_c);
-      for (const o of this.enemies) {
-        if (o === e) continue;
-        _c.subVectors(pos, o.mesh.position);
-        const d2 = _c.lengthSq();
-        if (d2 < 144) steer.addScaledVector(_c.normalize(), 1.2);
+    const ppos = this.camera.position;
+    this.inMine = !!this.world.mine?.contains(ppos, 2);
+    this.tracked.length = 0;
+    for (const e of this.enemies.slice()) {
+      if (e.hp <= 0) continue;
+      const dist = e.pos.distanceTo(ppos);
+      if (e.habitat === 'mine') {
+        // Mine enemies only run (and draw) while the player is down there and reasonably close.
+        const active = this.inMine && dist < 260;
+        e.mesh.visible = active && dist < 200;
+        if (!active) continue;
       }
-      for (const r of this.rocks) {
-        _c.subVectors(pos, r.mesh.position);
-        const d = _c.length();
-        const clear = r.radius + ENEMY.radius + 6;
-        if (d < clear) steer.addScaledVector(_c.normalize(), (clear - d) / 3);
-      }
-      e.vel.addScaledVector(steer, ENEMY.accel * dt * Math.min(aggression, 1.6));
-      e.vel.multiplyScalar(Math.exp(-ENEMY.damping * dt));
-      pos.addScaledVector(e.vel, dt);
-      e.mesh.lookAt(ppos);
-      e.mesh.children[1].rotation.z += dt * 2; // spin the ring
-
-      e.hitFlash = Math.max(0, e.hitFlash - dt * 6);
-      e.bodyMat.emissive.setRGB(0.12 + e.hitFlash, 0.03 + e.hitFlash * 0.9, 0.02 + e.hitFlash * 0.7);
-
-      e.cooldown -= dt;
-      if (e.cooldown <= 0 && engaged && dist < ENEMY.range) {
-        e.cooldown = rand(1.1, 2.3) / aggression;
-        this.fireEnemy(e);
-      }
+      e.update(this.ctx, dt);
+      if (e.stealth < 0.5 && (e.habitat === 'space' || (e.awake && dist < 220))) this.tracked.push(e);
     }
+    // Anything that died during its own update (Embers detonating).
+    for (let i = this.enemies.length - 1; i >= 0; i--) if (this.enemies[i].hp <= 0) this.killEnemy(this.enemies[i]);
   }
 
   private updateBolts(dt: number) {
@@ -459,8 +465,8 @@ export class Game {
         }
       } else if (!dead) {
         for (const e of this.enemies) {
-          if (segmentHitsSphere(b.prev, b.mesh.position, e.mesh.position, ENEMY.radius)) {
-            this.damageEnemy(e, b.dmg, b.mesh.position);
+          if (e.hp > 0 && e.mesh.visible !== false && e.hitTest(b.prev, b.mesh.position)) {
+            this.damageEnemy(e, b.dmg, b.prev, b.mesh.position);
             dead = true;
             break;
           }
@@ -479,12 +485,12 @@ export class Game {
   }
 
   private cruiseBlockedReason(): string | null {
-    for (const e of this.enemies) if (e.mesh.position.distanceTo(this.camera.position) < 300) return 'HOSTILES NEARBY';
+    for (const e of this.enemies) if ((e.habitat === 'space' || e.awake) && e.mesh.position.distanceTo(this.camera.position) < 300) return 'HOSTILES NEARBY';
     return this.world.cruiseBlocked(this.camera.position);
   }
 
   private updateWaves(dt: number) {
-    if (this.enemies.length > 0) return;
+    if (this.enemies.some((e) => e.wave)) return;
     if (!this.inCombatZone()) return;
     if (this.waveTimer > 0) {
       this.waveTimer -= dt;
@@ -503,61 +509,62 @@ export class Game {
 
   private spawnWave() {
     this.wave++;
-    const count = Math.min(2 + this.wave, 12);
-    const hp = ENEMY.baseHp + ENEMY.hpPerWave * (this.wave - 1);
-    const fwd = _a.copy(FORWARD).applyQuaternion(this.camera.quaternion);
-    for (let i = 0; i < count; i++) {
+    const fwd = _a.copy(FORWARD).applyQuaternion(this.camera.quaternion).clone();
+    const place = (min: number, max: number) => {
       const pos = new THREE.Vector3();
-      // Spawn mostly ahead of the player so the fight finds them.
+      // Spawn mostly ahead of the player so the fight finds them, clear of asteroids.
+      let guard = 0;
       do {
-        randomOnSphere(pos, rand(120, 190));
+        randomOnSphere(pos, rand(min, max));
         if (pos.dot(fwd) < 0 && Math.random() < 0.7) pos.negate();
         pos.add(this.camera.position);
-      } while (this.rocks.some((r) => r.mesh.position.distanceTo(pos) < r.radius + 8));
-      this.enemies.push(this.makeEnemy(pos, hp));
-    }
-    if (this.wave > 1) this.events.message(`WAVE ${this.wave}`, `${count} hostiles inbound`, 2);
-  }
-
-  private makeEnemy(pos: THREE.Vector3, hp: number): Enemy {
-    const g = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xa3a9b5, metalness: 0.4, roughness: 0.45, flatShading: true });
-    const body = new THREE.Mesh(geo.body, bodyMat);
-    const ring = new THREE.Mesh(geo.ring, mat.ring);
-    const eye = new THREE.Mesh(geo.eye, mat.eye);
-    eye.position.z = 1.3;
-    const wing = new THREE.Mesh(geo.wing, mat.wing);
-    const thruster = new THREE.Mesh(geo.spark, mat.thruster);
-    thruster.position.z = -1.5;
-    thruster.scale.set(0.45, 0.45, 0.9);
-    g.add(body, ring, eye, wing, thruster);
-    g.scale.setScalar(1.25);
-    g.position.copy(pos);
-    this.scene.add(g);
-    return {
-      mesh: g,
-      bodyMat,
-      vel: new THREE.Vector3(),
-      hp,
-      maxHp: hp,
-      cooldown: rand(1.5, 3),
-      orbitAxis: randomOnSphere(new THREE.Vector3(), 1),
-      hitFlash: 0,
+      } while (guard++ < 30 && this.rocks.some((r) => r.mesh.position.distanceTo(pos) < r.radius + 12));
+      return pos;
     };
+    const { enemies, intro } = buildWave(this.wave, place);
+    for (const e of enemies) {
+      if (e.kind === 'warden') e.score = 50 + this.wave * 10;
+      this.addEnemy(e);
+    }
+    if (intro) this.events.message(intro[0], intro[1], 3);
+    else if (enemies.some((e) => e.kind === 'matriarch')) this.events.message(`WAVE ${this.wave}`, 'Carrier inbound', 2.5);
+    else if (this.wave > 1) this.events.message(`WAVE ${this.wave}`, `${enemies.length} hostiles inbound`, 2);
   }
 
-  private damageEnemy(e: Enemy, dmg: number, at: THREE.Vector3) {
-    e.hp -= dmg;
+  private damageEnemy(e: Enemy, dmg: number, from: THREE.Vector3, at: THREE.Vector3) {
+    const done = e.takeHit(dmg, from, at, this.ctx);
+    if (done <= 0) return; // deflected; the enemy made its own sparks
     e.hitFlash = 1;
     this.sparks(at, 0x9ff8ff, 4);
     this.sfx.hit(at);
-    if (e.hp <= 0) {
-      this.explode(e.mesh.position, 1);
-      this.scene.remove(e.mesh);
-      e.bodyMat.dispose();
-      this.enemies.splice(this.enemies.indexOf(e), 1);
-      this.kills++;
-      this.score += 50 + this.wave * 10;
+    if (e.hp <= 0) this.killEnemy(e);
+  }
+
+  private killEnemy(e: Enemy) {
+    const i = this.enemies.indexOf(e);
+    if (i < 0) return;
+    this.enemies.splice(i, 1);
+    e.hp = 0;
+    e.onDeath(this.ctx);
+    this.explode(e.mesh.position, THREE.MathUtils.clamp(e.radius / 3, 0.7, 3));
+    e.dispose();
+    this.kills++;
+    this.score += e.score;
+  }
+
+  /** Area damage with linear falloff. Hurts the player and every enemy except the source. */
+  private blast(at: THREE.Vector3, radius: number, dmg: number, source?: Enemy) {
+    this.explode(at, radius / 7);
+    const pd = at.distanceTo(this.camera.position);
+    if (pd < radius + PLAYER.radius) this.damagePlayer(dmg * (1 - Math.max(0, pd - PLAYER.radius) / radius));
+    const pos = at.clone();
+    for (const e of this.enemies.slice()) {
+      if (e === source || e.hp <= 0) continue;
+      const d = e.pos.distanceTo(pos) - e.radius;
+      if (d >= radius) continue;
+      e.hp -= dmg * 2 * (1 - Math.max(0, d) / radius);
+      e.hitFlash = 1;
+      if (e.hp <= 0) this.killEnemy(e);
     }
   }
 

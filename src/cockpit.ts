@@ -766,7 +766,7 @@ export class Cockpit {
       c.shadowBlur = 0;
     };
     for (const wp of nav.waypoints) plot(wp.pos, '#ffb02e', 7, true);
-    for (const e of game.enemies) plot(e.mesh.position, e.hitFlash > 0.3 ? '#ffffff' : '#ff5a3c', 9, false);
+    for (const e of game.tracked) plot(e.mesh.position, e.hitFlash > 0.3 ? '#ffffff' : '#ff5a3c', 9, false);
 
     c.textAlign = 'center';
     c.textBaseline = 'middle';
